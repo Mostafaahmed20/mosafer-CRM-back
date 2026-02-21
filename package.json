@@ -1,0 +1,12 @@
+{
+  "name": "crm-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @trello/server run dev",
+    "check": "pnpm --filter @trello/server run check",
+    "build": "pnpm --filter @trello/server run build",
+    "start": "pnpm --filter @trello/server run start"
+  }
+}

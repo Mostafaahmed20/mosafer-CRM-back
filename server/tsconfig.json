@@ -1,0 +1,15 @@
+{
+  "include": ["./**/*.ts"],
+  "exclude": ["../node_modules", "./dist", "./migrations/**/*.ts"],
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowImportingTsExtensions": true,
+    "types": ["node"],
+    "noEmit": true
+  }
+}
