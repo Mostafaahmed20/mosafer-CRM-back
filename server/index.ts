@@ -16,6 +16,7 @@ import activityRoutes from "./routes/activity.js";
 import debugRoutes from "./routes/debug.js";
 import boardMessageRoutes from "./routes/boardMessages.js";
 import healthRoutes from "./routes/health.js";
+import customerRoutes from "./routes/customers.js";
 import { startDueDateReminderJob } from "./jobs/dueDateReminders.js";
 import { startBookingOpsAutomationJob } from "./jobs/bookingOpsAutomation.js";
 import { startSlaMonitorJob } from "./jobs/slaMonitor.js";
@@ -100,6 +101,7 @@ async function startServer() {
   app.use("/api/boards/:boardId/activity", activityRoutes);
   app.use("/api/boards/:boardId/messages", boardMessageRoutes);
   app.use("/api/notifications", notificationRoutes);
+  app.use("/api/customers", customerRoutes);
   app.use("/api/debug", debugRoutes);
   app.use("/api", notFoundApiHandler);
   app.use(apiErrorHandler);

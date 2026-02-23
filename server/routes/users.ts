@@ -159,7 +159,7 @@ router.post("/login", loginRateLimit, async (req: Request, res: Response) => {
     const token = generateToken(String(user._id));
     res.json({
       token,
-      user: { _id: user._id, username: user.username, email: user.email },
+      user: { _id: user._id, username: user.username, email: user.email, role: user.role || "user" },
     });
   } catch (error) {
     console.error("Login error:", error);
@@ -214,7 +214,7 @@ router.post("/google", googleRateLimit, async (req: Request, res: Response) => {
     const token = generateToken(String(user._id));
     res.json({
       token,
-      user: { _id: user._id, username: user.username, email: user.email },
+      user: { _id: user._id, username: user.username, email: user.email, role: user.role || "user" },
     });
   } catch (error) {
     console.error("Google login error:", error);

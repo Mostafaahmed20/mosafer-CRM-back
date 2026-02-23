@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 export interface IUser extends Document {
   username: string;
   email: string;
+  role: "user" | "admin";
   password?: string;
   authProvider: "local" | "google";
   googleId?: string;
@@ -19,6 +20,7 @@ const userSchema = new mongoose.Schema<IUser>(
   {
     username: { type: String, required: true },
     email: { type: String, required: true, unique: true, lowercase: true },
+    role: { type: String, enum: ["user", "admin"], default: "user" },
     password: { type: String, required: false },
     authProvider: { type: String, enum: ["local", "google"], default: "local" },
     googleId: { type: String, unique: true, sparse: true },
