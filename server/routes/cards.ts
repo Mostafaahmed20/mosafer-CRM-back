@@ -264,6 +264,18 @@ router.patch("/:cardId", boardAuth("guest"), async (req: BoardAuthRequest, res: 
       updateData.dueReminderDueSent = false;
       updateData.dueReminderDueSentAt = null;
     }
+    if (Object.prototype.hasOwnProperty.call(updateData, "dueComplete")) {
+      const nextDueComplete = Boolean(updateData.dueComplete);
+      const wasDueComplete = Boolean(existingCard.dueComplete);
+      if (nextDueComplete && !wasDueComplete) {
+        updateData.completedAt = new Date();
+      } else if (!nextDueComplete && wasDueComplete) {
+        updateData.completedAt = null;
+      } else if (nextDueComplete && !existingCard.completedAt) {
+        // Backfill completion timestamp for already-completed legacy cards.
+        updateData.completedAt = new Date();
+      }
+    }
     if (
       Object.prototype.hasOwnProperty.call(updateData, "arrivalDate") ||
       Object.prototype.hasOwnProperty.call(updateData, "checkInDate")

@@ -17,6 +17,9 @@ import debugRoutes from "./routes/debug.js";
 import boardMessageRoutes from "./routes/boardMessages.js";
 import healthRoutes from "./routes/health.js";
 import customerRoutes from "./routes/customers.js";
+import analyticsRoutes from "./routes/analytics.js";
+import analyticsDashboardRoutes from "./routes/analyticsDashboard.js";
+import adminTicketsRoutes from "./routes/adminTickets.js";
 import { startDueDateReminderJob } from "./jobs/dueDateReminders.js";
 import { startBookingOpsAutomationJob } from "./jobs/bookingOpsAutomation.js";
 import { startSlaMonitorJob } from "./jobs/slaMonitor.js";
@@ -100,27 +103,40 @@ async function startServer() {
   app.use("/api/boards/:boardId/lists/:listId/cards", cardRoutes);
   app.use("/api/boards/:boardId/activity", activityRoutes);
   app.use("/api/boards/:boardId/messages", boardMessageRoutes);
+  app.use("/api/boards/:boardId/analytics", analyticsRoutes);
   app.use("/api/notifications", notificationRoutes);
   app.use("/api/customers", customerRoutes);
+  app.use("/api/analytics", analyticsDashboardRoutes);
+  app.use("/api/admin/tickets", adminTicketsRoutes);
   app.use("/api/debug", debugRoutes);
   app.use("/api", notFoundApiHandler);
   app.use(apiErrorHandler);
 
   // Serve uploaded files
   const uploadsPath = path.resolve(__dirname, "..", "uploads");
-  app.use("/uploads", express.static(uploadsPath));
+  app.use(
+    "/uploads",
+    express.static(uploadsPath, { fallthrough: false })
+  );
 
   // Serve static files in production
   const staticPath =
     process.env.NODE_ENV === "production"
       ? path.resolve(__dirname, "public")
       : path.resolve(__dirname, "..", "dist", "public");
+  const indexHtmlPath = path.join(staticPath, "index.html");
+  const hasFrontendBuild = process.env.NODE_ENV !== "production" || (await import("node:fs")).existsSync(indexHtmlPath);
 
-  app.use(express.static(staticPath));
+  if (hasFrontendBuild) {
+    app.use(express.static(staticPath));
+  }
 
   // SPA fallback - serve index.html for all non-API routes
   app.get("*", (_req, res) => {
-    res.sendFile(path.join(staticPath, "index.html"));
+    if (!hasFrontendBuild) {
+      return res.status(404).json({ message: "Not found" });
+    }
+    res.sendFile(indexHtmlPath);
   });
 
   const port = env.PORT;

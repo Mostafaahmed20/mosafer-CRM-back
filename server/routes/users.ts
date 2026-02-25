@@ -2,7 +2,8 @@ import { Router, Request, Response } from "express";
 import crypto from "crypto";
 import { OAuth2Client } from "google-auth-library";
 import { User } from "../models/User.js";
-import { generateToken } from "../middleware/auth.js";
+import { AuthRequest, authMiddleware, generateToken, requireVerifiedEmail } from "../middleware/auth.js";
+import { requireGlobalAdmin } from "../middleware/globalAdmin.js";
 import { env } from "../config/env.js";
 import {
   loginRateLimit,
@@ -27,6 +28,7 @@ const hashToken = (token: string) =>
 const createRawToken = () => crypto.randomBytes(32).toString("hex");
 const isProd = env.IS_PROD;
 const appBaseUrl = env.APP_BASE_URL;
+const GLOBAL_USER_ROLES = ["user", "admin"] as const;
 
 async function trySendEmailWithFallback({
   to,
@@ -60,6 +62,19 @@ async function trySendEmailWithFallback({
     console.warn(`[EMAIL-DEV-FALLBACK] Could not send email to ${to}. Open this URL manually: ${url}`);
     return { delivered: false as const, devUrl: url };
   }
+}
+
+function toAdminUserSummary(user: any) {
+  return {
+    _id: user._id,
+    username: user.username,
+    email: user.email,
+    role: user.role || "user",
+    canViewAllAnalytics: Boolean(user.canViewAllAnalytics),
+    emailVerified: Boolean(user.emailVerified),
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+  };
 }
 
 // POST /api/users/register
@@ -159,7 +174,13 @@ router.post("/login", loginRateLimit, async (req: Request, res: Response) => {
     const token = generateToken(String(user._id));
     res.json({
       token,
-      user: { _id: user._id, username: user.username, email: user.email, role: user.role || "user" },
+      user: {
+        _id: user._id,
+        username: user.username,
+        email: user.email,
+        role: user.role || "user",
+        canViewAllAnalytics: Boolean((user as any).canViewAllAnalytics),
+      },
     });
   } catch (error) {
     console.error("Login error:", error);
@@ -214,7 +235,13 @@ router.post("/google", googleRateLimit, async (req: Request, res: Response) => {
     const token = generateToken(String(user._id));
     res.json({
       token,
-      user: { _id: user._id, username: user.username, email: user.email, role: user.role || "user" },
+      user: {
+        _id: user._id,
+        username: user.username,
+        email: user.email,
+        role: user.role || "user",
+        canViewAllAnalytics: Boolean((user as any).canViewAllAnalytics),
+      },
     });
   } catch (error) {
     console.error("Google login error:", error);
@@ -355,5 +382,130 @@ router.post("/reset-password", resetPasswordRateLimit, async (req: Request, res:
     res.status(500).json({ message: "Server error" });
   }
 });
+
+// PATCH /api/users/admin/:userId/analytics-access
+router.patch(
+  "/admin/:userId/analytics-access",
+  authMiddleware,
+  requireVerifiedEmail,
+  requireGlobalAdmin,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { canViewAllAnalytics } = req.body ?? {};
+
+      if (typeof canViewAllAnalytics !== "boolean") {
+        return res.status(400).json({
+          message: "`canViewAllAnalytics` boolean is required",
+        });
+      }
+
+      const user = await User.findById(req.params.userId).select(
+        "_id username email role canViewAllAnalytics"
+      );
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      if (canViewAllAnalytics && user.role !== "admin") {
+        return res.status(400).json({
+          message: "Analytics access can only be enabled for users with admin role",
+        });
+      }
+
+      user.canViewAllAnalytics = canViewAllAnalytics;
+      await user.save();
+
+      res.json({
+        message: "Analytics access updated",
+        user: {
+          _id: user._id,
+          username: user.username,
+          email: user.email,
+          role: user.role || "user",
+          canViewAllAnalytics: Boolean((user as any).canViewAllAnalytics),
+        },
+      });
+    } catch (error) {
+      console.error("Update analytics access error:", error);
+      res.status(500).json({ message: "Server error" });
+    }
+  }
+);
+
+// GET /api/users/admin/users
+router.get(
+  "/admin/users",
+  authMiddleware,
+  requireVerifiedEmail,
+  requireGlobalAdmin,
+  async (_req: AuthRequest, res: Response) => {
+    try {
+      const users = await User.find({})
+        .select("_id username email role canViewAllAnalytics emailVerified createdAt updatedAt")
+        .sort({ createdAt: -1 });
+
+      res.json({
+        users: users.map((user) => toAdminUserSummary(user)),
+      });
+    } catch (error) {
+      console.error("List admin users error:", error);
+      res.status(500).json({ message: "Server error" });
+    }
+  }
+);
+
+// PATCH /api/users/admin/:userId/role
+router.patch(
+  "/admin/:userId/role",
+  authMiddleware,
+  requireVerifiedEmail,
+  requireGlobalAdmin,
+  async (req: AuthRequest, res: Response) => {
+    try {
+      const { role } = req.body ?? {};
+      const normalizedRole = typeof role === "string" ? role.trim() : "";
+
+      if (!GLOBAL_USER_ROLES.includes(normalizedRole as (typeof GLOBAL_USER_ROLES)[number])) {
+        return res.status(400).json({ message: 'Role must be "user" or "admin"' });
+      }
+
+      const user = await User.findById(req.params.userId).select(
+        "_id username email role canViewAllAnalytics emailVerified createdAt updatedAt"
+      );
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      const nextRole = normalizedRole as "user" | "admin";
+      const currentRole = (user.role || "user") as "user" | "admin";
+
+      if (currentRole === "admin" && nextRole !== "admin") {
+        const adminCount = await User.countDocuments({ role: "admin" });
+        const isSelf = String(user._id) === String(req.userId);
+        if (adminCount <= 1) {
+          return res.status(400).json({ message: "Cannot demote the last global admin" });
+        }
+        // Optional stricter safeguard: prevent locking yourself out accidentally if you are managing access from UI.
+        if (isSelf && adminCount <= 1) {
+          return res.status(400).json({ message: "Cannot remove your own last global admin access" });
+        }
+      }
+
+      user.role = nextRole;
+      if (nextRole !== "admin") {
+        user.canViewAllAnalytics = false;
+      }
+      await user.save();
+
+      res.json({
+        message: "Global role updated",
+        user: toAdminUserSummary(user),
+      });
+    } catch (error) {
+      console.error("Update global role error:", error);
+      res.status(500).json({ message: "Server error" });
+    }
+  }
+);
 
 export default router;

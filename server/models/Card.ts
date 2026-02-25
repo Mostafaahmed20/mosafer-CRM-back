@@ -42,6 +42,7 @@ export interface ICard extends Document {
   position: number;
   dueDate?: Date;
   dueComplete: boolean;
+  completedAt?: Date;
   dueReminder24hSent?: boolean;
   dueReminder24hSentAt?: Date;
   dueReminder1hSent?: boolean;
@@ -175,6 +176,7 @@ const cardSchema = new mongoose.Schema<ICard>(
     position: { type: Number, default: 0 },
     dueDate: { type: Date },
     dueComplete: { type: Boolean, default: false },
+    completedAt: { type: Date },
     dueReminder24hSent: { type: Boolean, default: false },
     dueReminder24hSentAt: { type: Date },
     dueReminder1hSent: { type: Boolean, default: false },

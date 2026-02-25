@@ -8,37 +8,26 @@ import { Notification } from "../models/Notification.js";
 import { AuthRequest, authMiddleware, requireVerifiedEmail } from "../middleware/auth.js";
 import { sendEmail, buildBoardInviteEmail } from "../lib/email.js";
 import { emitNotifications } from "../lib/notify.js";
+import {
+  BOARD_ROLE_HIERARCHY as ROLE_HIERARCHY,
+  getBoardRole as getUserBoardRole,
+  isBoardMember,
+  isGlobalAdmin,
+} from "../lib/accessControl.js";
 
 const router = Router();
 
 router.use(authMiddleware, requireVerifiedEmail);
-
-const ROLE_HIERARCHY: Record<"admin" | "member" | "guest" | "observer", number> = {
-  admin: 4,
-  member: 3,
-  guest: 2,
-  observer: 1,
-};
-
-function getUserBoardRole(board: any, userId: string): "admin" | "member" | "guest" | "observer" | null {
-  const members = (board.members || []) as any[];
-  if (members.length > 0 && members[0]?.user !== undefined) {
-    const entry = members.find((m) => m.user.toString() === userId);
-    return (entry?.role as any) || null;
-  }
-
-  if (board.owner?.toString?.() === userId) return "admin";
-  const isLegacyMember = members.some((m) => m.toString() === userId);
-  return isLegacyMember ? "member" : null;
-}
 
 // GET /api/boards - Get all boards for current user
 router.get("/", async (req: AuthRequest, res: Response) => {
   try {
     console.log(`📋 Fetching boards for user: ${req.userId}`);
 
-    // Query for boards where user is owner or member
-    const boards = await Board.find({
+    const globalAdmin = isGlobalAdmin(req.user);
+
+    // Query for all boards for global admins, otherwise scope to owner/member.
+    const boards = await Board.find(globalAdmin ? {} : {
       $or: [
         { owner: req.userId },
         { "members.user": req.userId }
@@ -106,6 +95,10 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ message: "Board not found" });
     }
 
+    if (!isGlobalAdmin(req.user) && !isBoardMember(board, req.userId!)) {
+      return res.status(403).json({ message: "You are not allowed to access this board" });
+    }
+
     // Handle migration from old format to new format
     const members = board.members as any[];
     if (members.length > 0 && members[0].user === undefined) {
@@ -137,7 +130,7 @@ router.get("/:boardId/archived-cards", async (req: AuthRequest, res: Response) =
       return res.status(404).json({ message: "Board not found" });
     }
 
-    const role = getUserBoardRole(board, req.userId!);
+    const role = isGlobalAdmin(req.user) ? "admin" : getUserBoardRole(board, req.userId!);
     if (!role) {
       return res.status(403).json({ message: "You are not a member of this board" });
     }
@@ -178,7 +171,7 @@ router.patch("/:boardId/archived-cards/:cardId/restore", async (req: AuthRequest
       return res.status(404).json({ message: "Board not found" });
     }
 
-    const role = getUserBoardRole(board, req.userId!);
+    const role = isGlobalAdmin(req.user) ? "admin" : getUserBoardRole(board, req.userId!);
     if (!role || ROLE_HIERARCHY[role] < ROLE_HIERARCHY.member) {
       return res.status(403).json({ message: "Member role or higher is required" });
     }
@@ -216,7 +209,7 @@ router.delete("/:boardId/archived-cards/:cardId", async (req: AuthRequest, res: 
       return res.status(404).json({ message: "Board not found" });
     }
 
-    const role = getUserBoardRole(board, req.userId!);
+    const role = isGlobalAdmin(req.user) ? "admin" : getUserBoardRole(board, req.userId!);
     if (role !== "admin") {
       return res.status(403).json({ message: "Only admins can permanently delete archived cards" });
     }
@@ -275,10 +268,8 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ message: "Board not found" });
     }
 
-    const member = board.members.find(
-      (m) => m.user.toString() === req.userId
-    );
-    if (!member || member.role !== "admin") {
+    const role = isGlobalAdmin(req.user) ? "admin" : getUserBoardRole(board, req.userId!);
+    if (role !== "admin") {
       return res
         .status(403)
         .json({ message: "Only admins can update board settings" });
@@ -308,10 +299,8 @@ router.delete("/:id", async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ message: "Board not found" });
     }
 
-    const member = board.members.find(
-      (m) => m.user.toString() === req.userId
-    );
-    if (!member || member.role !== "admin") {
+    const role = isGlobalAdmin(req.user) ? "admin" : getUserBoardRole(board, req.userId!);
+    if (role !== "admin") {
       return res
         .status(403)
         .json({ message: "Only admins can delete this board" });
@@ -347,10 +336,8 @@ router.post("/:boardId/members", async (req: AuthRequest, res: Response) => {
     }
 
     // Only admins can add members
-    const requestingMember = board.members.find(
-      (m) => m.user.toString() === req.userId
-    );
-    if (!requestingMember || requestingMember.role !== "admin") {
+    const requesterRole = isGlobalAdmin(req.user) ? "admin" : getUserBoardRole(board, req.userId!);
+    if (requesterRole !== "admin") {
       return res
         .status(403)
         .json({ message: "Only admins can add members" });
@@ -402,10 +389,8 @@ router.patch(
         return res.status(404).json({ message: "Board not found" });
       }
 
-      const requestingMember = board.members.find(
-        (m) => m.user.toString() === req.userId
-      );
-      if (!requestingMember || requestingMember.role !== "admin") {
+      const requesterRole = isGlobalAdmin(req.user) ? "admin" : getUserBoardRole(board, req.userId!);
+      if (requesterRole !== "admin") {
         return res
           .status(403)
           .json({ message: "Only admins can change roles" });
@@ -456,10 +441,8 @@ router.delete(
       const isSelf = req.params.userId === req.userId;
 
       if (!isSelf) {
-        const requestingMember = board.members.find(
-          (m) => m.user.toString() === req.userId
-        );
-        if (!requestingMember || requestingMember.role !== "admin") {
+        const requesterRole = isGlobalAdmin(req.user) ? "admin" : getUserBoardRole(board, req.userId!);
+        if (requesterRole !== "admin") {
           return res
             .status(403)
             .json({ message: "Only admins can remove members" });

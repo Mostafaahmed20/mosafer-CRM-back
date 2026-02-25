@@ -5,6 +5,29 @@ import { env } from "./config/env.js";
 
 const JWT_SECRET = env.JWT_SECRET;
 
+function normalizeToken(raw?: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  return trimmed.startsWith("Bearer ") ? trimmed.slice(7).trim() : trimmed;
+}
+
+function getHandshakeToken(socket: Parameters<SocketServer["use"]>[0] extends (socket: infer S, next: any) => any ? S : never) {
+  const auth = socket.handshake.auth as
+    | { token?: unknown; accessToken?: unknown; Authorization?: unknown }
+    | undefined;
+  const authHeader = socket.handshake.headers?.authorization;
+  const queryToken = socket.handshake.query?.token;
+
+  return (
+    normalizeToken(auth?.token) ??
+    normalizeToken(auth?.accessToken) ??
+    normalizeToken(auth?.Authorization) ??
+    normalizeToken(Array.isArray(authHeader) ? authHeader[0] : authHeader) ??
+    normalizeToken(Array.isArray(queryToken) ? queryToken[0] : queryToken)
+  );
+}
+
 export function setupSocket(server: Server) {
   const io = new SocketServer(server, {
     cors: {
@@ -15,8 +38,9 @@ export function setupSocket(server: Server) {
 
   // Authentication middleware
   io.use((socket, next) => {
-    const token = socket.handshake.auth.token;
+    const token = getHandshakeToken(socket);
     if (!token) {
+      console.warn("[Socket.IO] Missing auth token during handshake");
       return next(new Error("Authentication error"));
     }
 
@@ -25,6 +49,7 @@ export function setupSocket(server: Server) {
       socket.data.userId = decoded.userId;
       next();
     } catch (err) {
+      console.warn("[Socket.IO] Invalid auth token during handshake");
       next(new Error("Authentication error"));
     }
   });
