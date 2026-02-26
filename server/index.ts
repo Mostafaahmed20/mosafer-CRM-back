@@ -28,6 +28,7 @@ import { startBullMqJobs } from "./queues/startBullMqJobs.js";
 import { env } from "./config/env.js";
 import { setBullMqError, setBullMqRuntime, setJobMode } from "./queues/runtime.js";
 import { logger } from "./lib/logger.js";
+import { UPLOADS_DIR } from "./lib/uploads.js";
 import {
   apiErrorHandler,
   notFoundApiHandler,
@@ -113,10 +114,9 @@ async function startServer() {
   app.use(apiErrorHandler);
 
   // Serve uploaded files
-  const uploadsPath = path.resolve(__dirname, "..", "uploads");
   app.use(
     "/uploads",
-    express.static(uploadsPath, { fallthrough: false })
+    express.static(UPLOADS_DIR, { fallthrough: false })
   );
 
   // Serve static files in production

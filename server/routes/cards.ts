@@ -2,7 +2,6 @@ import { Router, Response } from "express";
 import multer from "multer";
 import path from "path";
 import fs from "fs";
-import { fileURLToPath } from "url";
 import { CARD_STATUSES, Card } from "../models/Card.js";
 import { List } from "../models/List.js";
 import { Notification } from "../models/Notification.js";
@@ -14,10 +13,7 @@ import { getSocketInstance } from "../socket.js";
 import { recordActivity } from "../lib/activity.js";
 import { emitNotifications } from "../lib/notify.js";
 import { ensureCardSla, deriveSlaStatus, computeSlaDue } from "../lib/sla.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const UPLOADS_DIR = path.resolve(__dirname, "..", "..", "uploads");
+import { UPLOADS_DIR } from "../lib/uploads.js";
 
 // Ensure uploads directory exists
 if (!fs.existsSync(UPLOADS_DIR)) {
