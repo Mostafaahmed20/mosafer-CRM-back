@@ -64,7 +64,13 @@ export interface ICard extends Document {
     author: mongoose.Types.ObjectId;
     createdAt: Date;
   }[];
-  attachments: { name: string; url: string; type: string }[];
+  attachments: {
+    name: string;
+    url: string;
+    type: string;
+    cloudinaryPublicId?: string;
+    cloudinaryResourceType?: string;
+  }[];
   checklists: {
     _id?: mongoose.Types.ObjectId;
     title: string;
@@ -213,6 +219,8 @@ const cardSchema = new mongoose.Schema<ICard>(
         name: { type: String },
         url: { type: String },
         type: { type: String },
+        cloudinaryPublicId: { type: String, default: "" },
+        cloudinaryResourceType: { type: String, default: "" },
       },
     ],
     checklists: [

@@ -92,4 +92,8 @@ export const env = {
   RESEND_FROM: readString("RESEND_FROM", "Trello Clone <no-reply@example.com>"),
   EMAIL_ENABLED: Boolean(readString("RESEND_API_KEY")),
   GOOGLE_CLIENT_ID: readString("GOOGLE_CLIENT_ID"),
+  CLOUDINARY_CLOUD_NAME: readString("CLOUDINARY_CLOUD_NAME"),
+  CLOUDINARY_API_KEY: readString("CLOUDINARY_API_KEY"),
+  CLOUDINARY_API_SECRET: readString("CLOUDINARY_API_SECRET"),
+  CLOUDINARY_FOLDER: readString("CLOUDINARY_FOLDER", "crm-attachments"),
 };

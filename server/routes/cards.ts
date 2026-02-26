@@ -14,6 +14,12 @@ import { recordActivity } from "../lib/activity.js";
 import { emitNotifications } from "../lib/notify.js";
 import { ensureCardSla, deriveSlaStatus, computeSlaDue } from "../lib/sla.js";
 import { UPLOADS_DIR } from "../lib/uploads.js";
+import {
+  deleteCloudinaryAttachment,
+  isCloudinaryConfigured,
+  safeUnlink,
+  uploadAttachmentToCloudinary,
+} from "../lib/cloudinary.js";
 
 // Ensure uploads directory exists
 if (!fs.existsSync(UPLOADS_DIR)) {
@@ -920,14 +926,28 @@ router.post(
       const card = await Card.findById(req.params.cardId);
       if (!card) {
         // Clean up uploaded file
-        fs.unlinkSync(req.file.path);
+        safeUnlink(req.file.path);
         return res.status(404).json({ message: "Card not found" });
+      }
+
+      let attachmentUrl = `/uploads/${req.file.filename}`;
+      let cloudinaryPublicId = "";
+      let cloudinaryResourceType = "";
+
+      if (isCloudinaryConfigured) {
+        const uploaded = await uploadAttachmentToCloudinary(req.file.path, req.file.originalname);
+        attachmentUrl = uploaded.url;
+        cloudinaryPublicId = uploaded.publicId;
+        cloudinaryResourceType = uploaded.resourceType;
+        safeUnlink(req.file.path);
       }
 
       card.attachments.push({
         name: req.file.originalname,
-        url: `/uploads/${req.file.filename}`,
+        url: attachmentUrl,
         type: req.file.mimetype,
+        cloudinaryPublicId,
+        cloudinaryResourceType,
       });
 
       await card.save();
@@ -938,6 +958,7 @@ router.post(
 
       res.json(card);
     } catch (error) {
+      safeUnlink(req.file?.path);
       console.error("Upload attachment error:", error);
       res.status(500).json({ message: "Server error" });
     }
@@ -960,10 +981,18 @@ router.delete(
         return res.status(404).json({ message: "Attachment not found" });
       }
 
-      // Delete file from disk
-      const filePath = path.join(UPLOADS_DIR, path.basename(attachment.url));
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
+      const cloudinaryPublicId = String(attachment.cloudinaryPublicId || "");
+      if (cloudinaryPublicId) {
+        await deleteCloudinaryAttachment(
+          cloudinaryPublicId,
+          String(attachment.cloudinaryResourceType || "image")
+        );
+      } else if (String(attachment.url || "").startsWith("/uploads/")) {
+        // Backward-compatible local file cleanup for older attachments.
+        const filePath = path.join(UPLOADS_DIR, path.basename(String(attachment.url)));
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+        }
       }
 
       (card.attachments as any).pull(req.params.attachmentId);
