@@ -30,6 +30,19 @@ interface AdminTicketsRequest extends AuthRequest {
   };
 }
 
+const ALLOWED_SORT_BY = [
+  "updatedAt",
+  "createdAt",
+  "priority",
+  "status",
+  "group",
+  "board",
+  "list",
+] as const;
+
+type AllowedSortBy = (typeof ALLOWED_SORT_BY)[number];
+type AllowedSortDir = "asc" | "desc";
+
 function parsePositiveInt(value: string | undefined, fallback: number, max: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
@@ -52,18 +65,36 @@ function isValidObjectId(id?: string): boolean {
   return Boolean(id && mongoose.Types.ObjectId.isValid(id));
 }
 
-function normalizeSort(sortBy?: string, sortDir?: string) {
-  const allowedSortBy = new Set([
-    "updatedAt",
-    "createdAt",
-    "dueDate",
-    "arrivalDate",
-    "priority",
-    "status",
-  ]);
-  const field = allowedSortBy.has(String(sortBy)) ? String(sortBy) : "updatedAt";
-  const dir = String(sortDir).toLowerCase() === "asc" ? 1 : -1;
-  return { [field]: dir as 1 | -1, _id: -1 as const };
+function parseSort(
+  sortBy?: string,
+  sortDir?: string
+): { sortBy: AllowedSortBy; sortDir: AllowedSortDir } | null {
+  const normalizedBy = String(sortBy || "").trim();
+  const normalizedDir = String(sortDir || "").trim().toLowerCase();
+
+  const by = normalizedBy
+    ? ((ALLOWED_SORT_BY as readonly string[]).includes(normalizedBy)
+        ? (normalizedBy as AllowedSortBy)
+        : null)
+    : ("updatedAt" as AllowedSortBy);
+  if (!by) return null;
+
+  const dir =
+    normalizedDir === ""
+      ? ("desc" as AllowedSortDir)
+      : normalizedDir === "asc" || normalizedDir === "desc"
+        ? (normalizedDir as AllowedSortDir)
+        : null;
+  if (!dir) return null;
+
+  return { sortBy: by, sortDir: dir };
+}
+
+function toMongoSort(sortBy: AllowedSortBy, sortDir: AllowedSortDir): Record<string, 1 | -1> {
+  const dir = sortDir === "asc" ? 1 : -1;
+  if (sortBy === "board") return { "boardDoc.title": dir, _id: -1 };
+  if (sortBy === "list") return { "listDoc.title": dir, _id: -1 };
+  return { [sortBy]: dir, _id: -1 };
 }
 
 async function getCardContext(cardId: string) {
@@ -79,13 +110,30 @@ async function getCardContext(cardId: string) {
   const board = list ? await Board.findById(list.board).select("_id title owner members") : null;
 
   return {
-    card,
+    card: {
+      _id: String(card._id),
+      title: card.title,
+      subject: card.subject,
+      description: card.description,
+      status: card.status,
+      priority: card.priority,
+      group: card.group,
+      agent: (card as any).agent?._id
+        ? {
+            _id: String((card as any).agent._id),
+            username: (card as any).agent.username,
+          }
+        : null,
+      bookingRef: card.bookingRef,
+      requester: card.requester,
+      createdAt: card.createdAt,
+      updatedAt: card.updatedAt,
+    },
     list: list
       ? {
           _id: String(list._id),
           title: list.title,
           board: String(list.board),
-          archived: Boolean(list.archived),
         }
       : null,
     board: board
@@ -101,11 +149,18 @@ async function getCardContext(cardId: string) {
 router.get("/", async (req: AdminTicketsRequest, res: Response) => {
   try {
     const page = parsePositiveInt(req.query.page, 1, 100000);
-    const limit = parsePositiveInt(req.query.limit, 50, 200);
+    const limit = parsePositiveInt(req.query.limit, 25, 200);
     const skip = (page - 1) * limit;
     const includeArchived = parseBool(req.query.includeArchived, false);
     const includeClosed = parseBool(req.query.includeClosed, true);
-    const sort = normalizeSort(req.query.sortBy, req.query.sortDir);
+    const sortInput = parseSort(req.query.sortBy, req.query.sortDir);
+    if (!sortInput) {
+      return res.status(400).json({
+        message:
+          'Invalid sort input. sortBy must be one of "updatedAt|createdAt|priority|status|group|board|list" and sortDir must be "asc|desc"',
+      });
+    }
+    const sort = toMongoSort(sortInput.sortBy, sortInput.sortDir);
 
     const match: Record<string, any> = {};
 
@@ -164,50 +219,107 @@ router.get("/", async (req: AdminTicketsRequest, res: Response) => {
       ];
     }
 
-    const [total, cards] = await Promise.all([
+    const [total, itemsRaw] = await Promise.all([
       Card.countDocuments(match),
-      Card.find(match)
-        .sort(sort)
-        .skip(skip)
-        .limit(limit)
-        .populate("creator", "username email")
-        .populate("agent", "username email")
-        .populate("members", "username email"),
+      Card.aggregate<any>([
+        { $match: match },
+        {
+          $lookup: {
+            from: "lists",
+            localField: "list",
+            foreignField: "_id",
+            as: "listDoc",
+          },
+        },
+        { $unwind: { path: "$listDoc", preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: "boards",
+            localField: "listDoc.board",
+            foreignField: "_id",
+            as: "boardDoc",
+          },
+        },
+        { $unwind: { path: "$boardDoc", preserveNullAndEmptyArrays: true } },
+        {
+          $lookup: {
+            from: "users",
+            localField: "agent",
+            foreignField: "_id",
+            as: "agentDoc",
+          },
+        },
+        { $unwind: { path: "$agentDoc", preserveNullAndEmptyArrays: true } },
+        { $sort: sort },
+        { $skip: skip },
+        { $limit: limit },
+        {
+          $project: {
+            card: {
+              _id: "$_id",
+              title: "$title",
+              subject: "$subject",
+              description: "$description",
+              status: "$status",
+              priority: "$priority",
+              group: "$group",
+              agent: {
+                $cond: [
+                  { $ifNull: ["$agentDoc._id", false] },
+                  { _id: "$agentDoc._id", username: "$agentDoc.username" },
+                  null,
+                ],
+              },
+              bookingRef: "$bookingRef",
+              requester: "$requester",
+              createdAt: "$createdAt",
+              updatedAt: "$updatedAt",
+            },
+            board: {
+              _id: "$boardDoc._id",
+              title: "$boardDoc.title",
+            },
+            listMeta: {
+              _id: "$listDoc._id",
+              title: "$listDoc.title",
+              board: "$listDoc.board",
+              archived: { $ifNull: ["$listDoc.archived", false] },
+              position: { $ifNull: ["$listDoc.position", 0] },
+            },
+          },
+        },
+      ]),
     ]);
 
-    const listIds = Array.from(new Set(cards.map((c: any) => String(c.list)).filter(Boolean)));
-    const lists = listIds.length
-      ? await List.find({ _id: { $in: listIds } }).select("_id title board archived")
-      : [];
-    const listMap = new Map(lists.map((list) => [String(list._id), list]));
-
-    const boardIds = Array.from(new Set(lists.map((l: any) => String(l.board)).filter(Boolean)));
-    const boards = boardIds.length
-      ? await Board.find({ _id: { $in: boardIds } }).select("_id title")
-      : [];
-    const boardMap = new Map(boards.map((board) => [String(board._id), board]));
-
-    const items = cards.map((card: any) => {
-      const list = listMap.get(String(card.list));
-      const board = list ? boardMap.get(String(list.board)) : null;
-      return {
-        ...card.toJSON(),
-        board: board
-          ? {
-              _id: String(board._id),
-              title: board.title,
-            }
-          : null,
-        listMeta: list
-          ? {
-              _id: String(list._id),
-              title: list.title,
-              board: String(list.board),
-              archived: Boolean(list.archived),
-            }
-          : null,
-      };
-    });
+    const items = itemsRaw.map((item) => ({
+      card: item.card
+        ? {
+            ...item.card,
+            _id: item.card._id ? String(item.card._id) : undefined,
+            agent: item.card.agent
+              ? {
+                  _id: String(item.card.agent._id),
+                  username: item.card.agent.username,
+                }
+              : null,
+          }
+        : null,
+      board: item.board?._id
+        ? {
+            _id: String(item.board._id),
+            title: item.board.title,
+          }
+        : null,
+      listMeta: item.listMeta?._id
+        ? {
+            _id: String(item.listMeta._id),
+            title: item.listMeta.title,
+            board: String(item.listMeta.board),
+            archived: Boolean(item.listMeta.archived),
+            position: Number(item.listMeta.position || 0),
+          }
+        : null,
+    }));
 
     res.json({
       scope: "global-admin",
@@ -222,6 +334,8 @@ router.get("/", async (req: AdminTicketsRequest, res: Response) => {
       filters: {
         includeArchived,
         includeClosed,
+        sortBy: sortInput.sortBy,
+        sortDir: sortInput.sortDir,
       },
     });
   } catch (error) {

@@ -21,9 +21,10 @@ interface AnalyticsDashboardRequest extends AuthRequest {
   };
 }
 
-function parseRange(value?: string): SupportedRange {
+function parseRange(value?: string): SupportedRange | null {
+  if (value == null || value === "") return "7d";
   if (value === "24h" || value === "7d" || value === "30d") return value;
-  return "7d";
+  return null;
 }
 
 function startOfHour(date: Date) {
@@ -245,16 +246,17 @@ function makeStatusForResponse(minutes: number): DashboardStatus {
 router.get("/dashboard", requireGlobalAnalyticsAccess, async (req: AnalyticsDashboardRequest, res: Response) => {
   try {
     const range = parseRange(req.query?.range);
+    if (!range) {
+      return res.status(400).json({ message: 'Invalid range. Use "24h", "7d", or "30d"' });
+    }
     const now = new Date();
     const window = buildRangeWindow(range, now);
-    const canViewAll = true;
     const listIds = await getUserScopedListIds(req.userId as string, true);
 
     if (listIds.length === 0) {
       return res.json({
         range,
         generatedAt: new Date().toISOString(),
-        scope: canViewAll ? "all" : "member",
         summary: {
           opened: 0,
           resolved: 0,
@@ -505,7 +507,6 @@ router.get("/dashboard", requireGlobalAnalyticsAccess, async (req: AnalyticsDash
     res.json({
       range,
       generatedAt: new Date().toISOString(),
-      scope: canViewAll ? "all" : "member",
       summary,
       trend,
       teams,

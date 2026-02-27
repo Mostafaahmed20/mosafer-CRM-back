@@ -400,7 +400,7 @@ router.patch(
       }
 
       const user = await User.findById(req.params.userId).select(
-        "_id username email role canViewAllAnalytics"
+        "_id username email role canViewAllAnalytics emailVerified createdAt updatedAt"
       );
       if (!user) {
         return res.status(404).json({ message: "User not found" });
@@ -417,13 +417,7 @@ router.patch(
 
       res.json({
         message: "Analytics access updated",
-        user: {
-          _id: user._id,
-          username: user.username,
-          email: user.email,
-          role: user.role || "user",
-          canViewAllAnalytics: Boolean((user as any).canViewAllAnalytics),
-        },
+        user: toAdminUserSummary(user),
       });
     } catch (error) {
       console.error("Update analytics access error:", error);
