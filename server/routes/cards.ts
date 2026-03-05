@@ -11,6 +11,7 @@ import { authMiddleware, requireVerifiedEmail } from "../middleware/auth.js";
 import { boardAuth, BoardAuthRequest } from "../middleware/boardAuth.js";
 import { getSocketInstance } from "../socket.js";
 import { recordActivity } from "../lib/activity.js";
+import { writeAuditEvent } from "../lib/audit.js";
 import { emitNotifications } from "../lib/notify.js";
 import { ensureCardSla, deriveSlaStatus, computeSlaDue } from "../lib/sla.js";
 import { UPLOADS_DIR } from "../lib/uploads.js";
@@ -189,6 +190,21 @@ router.post("/", boardAuth("guest"), async (req: BoardAuthRequest, res: Response
       cardId: card._id.toString(),
       notifyMembers: true,
     });
+    await writeAuditEvent({
+      req,
+      action: "card.created",
+      message: `Created card "${card.title}"`,
+      category: "card",
+      channel: "cards",
+      board: { id: boardId, title: req.board?.title },
+      list: { id: listId },
+      card: { id: card._id, title: card.title },
+      target: { id: card._id, type: "card", label: card.title },
+      meta: {
+        status: card.status,
+        source: card.source,
+      },
+    });
 
     res.status(201).json(card);
   } catch (error) {
@@ -241,6 +257,7 @@ router.patch("/:cardId", boardAuth("guest"), async (req: BoardAuthRequest, res: 
 
     const updateData: Record<string, unknown> = { ...req.body };
     const previousStatus = existingCard.status || "New";
+    const previousArchived = Boolean(existingCard.archived);
     const previousAgentId = existingCard.agent ? existingCard.agent.toString() : "";
     const previousMemberIds = new Set((existingCard.members || []).map((m: any) => m.toString()));
     if (typeof updateData.status === "string") {
@@ -492,6 +509,55 @@ router.patch("/:cardId", boardAuth("guest"), async (req: BoardAuthRequest, res: 
       meta: { fields: updatedFields },
       notifyMembers: true,
     });
+    const archivedChanged =
+      Object.prototype.hasOwnProperty.call(req.body || {}, "archived") &&
+      Boolean((card as any).archived) !== previousArchived;
+
+    let auditAction = "card.updated";
+    let auditMessage = activityMessage;
+    if (archivedChanged) {
+      const nextArchived = Boolean((card as any).archived);
+      auditAction = nextArchived ? "card.archived" : "card.unarchived";
+      auditMessage = nextArchived
+        ? `Archived card "${card.title}"`
+        : `Restored card "${card.title}" from archive`;
+    } else if (statusChanged) {
+      auditAction = "card.status_changed";
+    } else if (agentChanged || membersChanged) {
+      auditAction = "card.assignment_changed";
+    }
+
+    await writeAuditEvent({
+      req,
+      action: auditAction,
+      message: auditMessage,
+      category: "card",
+      channel: "cards",
+      board: { id: boardId, title: req.board?.title },
+      list: { id: card.list },
+      card: { id: card._id, title: card.title },
+      target: { id: card._id, type: "card", label: card.title },
+      meta: { fields: updatedFields, statusFrom: previousStatus, statusTo: nextStatus },
+    });
+
+    if (hasHandoverUpdate) {
+      await writeAuditEvent({
+        req,
+        action: "handover.updated",
+        message: `Updated handover details for "${card.title}"`,
+        category: "handover",
+        channel: "handover",
+        board: { id: boardId, title: req.board?.title },
+        list: { id: card.list },
+        card: { id: card._id, title: card.title },
+        target: { id: card._id, type: "card", label: card.title },
+        meta: {
+          fields: handoverKeys.filter((key) => Object.prototype.hasOwnProperty.call(req.body || {}, key)),
+          handoverStatus: card.handoverStatus,
+          handoverPendingState: card.handoverPendingState,
+        },
+      });
+    }
 
     res.json(card);
   } catch (error) {
@@ -533,6 +599,17 @@ router.delete("/:cardId", boardAuth("admin"), async (req: BoardAuthRequest, res:
       listId,
       cardId: card._id.toString(),
       notifyMembers: true,
+    });
+    await writeAuditEvent({
+      req,
+      action: "card.deleted",
+      message: `Deleted card "${card.title}"`,
+      category: "card",
+      channel: "cards",
+      board: { id: boardId, title: req.board?.title },
+      list: { id: listId },
+      card: { id: card._id, title: card.title },
+      target: { id: card._id, type: "card", label: card.title },
     });
 
     res.json({ message: "Card deleted" });
@@ -642,6 +719,21 @@ router.post("/reorder", boardAuth("member"), async (req: BoardAuthRequest, res: 
       cardId: card._id.toString(),
       meta: { oldListId, newListId: targetListId, newPosition },
       notifyMembers: targetListId === oldListId,
+    });
+    await writeAuditEvent({
+      req,
+      action: targetListId !== oldListId ? "card.moved" : "card.reordered",
+      message:
+        targetListId !== oldListId
+          ? `Moved card "${card.title}" to another list`
+          : `Reordered card "${card.title}"`,
+      category: "card",
+      channel: "cards",
+      board: { id: boardId, title: req.board?.title },
+      list: { id: targetListId },
+      card: { id: card._id, title: card.title },
+      target: { id: card._id, type: "card", label: card.title },
+      meta: { oldListId, newListId: targetListId, newPosition, fromListId: listId },
     });
 
     // Create notifications when card moves between lists
@@ -826,6 +918,18 @@ router.post("/:cardId/comments", boardAuth("guest"), async (req: BoardAuthReques
       listId: card.list.toString(),
       cardId: card._id.toString(),
     });
+    await writeAuditEvent({
+      req,
+      action: "comment.created",
+      message: `Added a comment on "${card.title}"`,
+      category: "comment",
+      channel: "comments",
+      board: { id: req.params.boardId as string, title: req.board?.title },
+      list: { id: card.list },
+      card: { id: card._id, title: card.title },
+      target: { id: card._id, type: "card", label: card.title },
+      meta: { commentLength: String(text).length },
+    });
 
     res.json(card);
   } catch (error) {
@@ -868,6 +972,18 @@ router.patch("/:cardId/comments/:commentId", boardAuth("guest"), async (req: Boa
     await card.populate("agent", "username email");
     await card.populate("comments.author", "username email");
     await card.populate("members", "username email");
+    await writeAuditEvent({
+      req,
+      action: "comment.updated",
+      message: `Edited a comment on "${card.title}"`,
+      category: "comment",
+      channel: "comments",
+      board: { id: req.params.boardId as string, title: req.board?.title },
+      list: { id: card.list },
+      card: { id: card._id, title: card.title },
+      target: { id: req.params.commentId, type: "comment", label: card.title },
+      meta: { commentLength: String(text).length },
+    });
 
     res.json(card);
   } catch (error) {
@@ -888,6 +1004,7 @@ router.delete("/:cardId/comments/:commentId", boardAuth("guest"), async (req: Bo
     if (!comment) {
       return res.status(404).json({ message: "Comment not found" });
     }
+    const deletedCommentText = String(comment.text || "");
 
     // Guest role check: can only delete own comments
     if (req.boardRole === "guest") {
@@ -904,6 +1021,18 @@ router.delete("/:cardId/comments/:commentId", boardAuth("guest"), async (req: Bo
     await card.populate("agent", "username email");
     await card.populate("comments.author", "username email");
     await card.populate("members", "username email");
+    await writeAuditEvent({
+      req,
+      action: "comment.deleted",
+      message: `Deleted a comment from "${card.title}"`,
+      category: "comment",
+      channel: "comments",
+      board: { id: req.params.boardId as string, title: req.board?.title },
+      list: { id: card.list },
+      card: { id: card._id, title: card.title },
+      target: { id: req.params.commentId, type: "comment", label: card.title },
+      meta: { commentLength: deletedCommentText.length },
+    });
 
     res.json(card);
   } catch (error) {
@@ -955,6 +1084,18 @@ router.post(
       await card.populate("agent", "username email");
       await card.populate("members", "username email");
       await card.populate("comments.author", "username email");
+      await writeAuditEvent({
+        req,
+        action: "attachment.added",
+        message: `Added attachment "${req.file.originalname}" to "${card.title}"`,
+        category: "attachment",
+        channel: "attachments",
+        board: { id: req.params.boardId as string, title: req.board?.title },
+        list: { id: card.list },
+        card: { id: card._id, title: card.title },
+        target: { type: "attachment", label: req.file.originalname },
+        meta: { mimeType: req.file.mimetype, size: req.file.size },
+      });
 
       res.json(card);
     } catch (error) {
@@ -980,6 +1121,7 @@ router.delete(
       if (!attachment) {
         return res.status(404).json({ message: "Attachment not found" });
       }
+      const deletedAttachmentName = String(attachment.name || "");
 
       const cloudinaryPublicId = String(attachment.cloudinaryPublicId || "");
       if (cloudinaryPublicId) {
@@ -1001,6 +1143,17 @@ router.delete(
       await card.populate("agent", "username email");
       await card.populate("members", "username email");
       await card.populate("comments.author", "username email");
+      await writeAuditEvent({
+        req,
+        action: "attachment.deleted",
+        message: `Removed attachment "${deletedAttachmentName}" from "${card.title}"`,
+        category: "attachment",
+        channel: "attachments",
+        board: { id: req.params.boardId as string, title: req.board?.title },
+        list: { id: card.list },
+        card: { id: card._id, title: card.title },
+        target: { id: req.params.attachmentId, type: "attachment", label: deletedAttachmentName },
+      });
 
       res.json(card);
     } catch (error) {

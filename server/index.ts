@@ -20,6 +20,7 @@ import customerRoutes from "./routes/customers.js";
 import analyticsRoutes from "./routes/analytics.js";
 import analyticsDashboardRoutes from "./routes/analyticsDashboard.js";
 import adminTicketsRoutes from "./routes/adminTickets.js";
+import auditRoutes from "./routes/audit.js";
 import { startDueDateReminderJob } from "./jobs/dueDateReminders.js";
 import { startBookingOpsAutomationJob } from "./jobs/bookingOpsAutomation.js";
 import { startSlaMonitorJob } from "./jobs/slaMonitor.js";
@@ -109,6 +110,7 @@ async function startServer() {
   app.use("/api/customers", customerRoutes);
   app.use("/api/analytics", analyticsDashboardRoutes);
   app.use("/api/admin/tickets", adminTicketsRoutes);
+  app.use("/api/audit", auditRoutes);
   app.use("/api/debug", debugRoutes);
   app.use("/api", notFoundApiHandler);
   app.use(apiErrorHandler);

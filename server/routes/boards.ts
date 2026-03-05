@@ -8,6 +8,7 @@ import { Notification } from "../models/Notification.js";
 import { AuthRequest, authMiddleware, requireVerifiedEmail } from "../middleware/auth.js";
 import { sendEmail, buildBoardInviteEmail } from "../lib/email.js";
 import { emitNotifications } from "../lib/notify.js";
+import { writeAuditEvent } from "../lib/audit.js";
 import {
   BOARD_ROLE_HIERARCHY as ROLE_HIERARCHY,
   getBoardRole as getUserBoardRole,
@@ -193,6 +194,17 @@ router.patch("/:boardId/archived-cards/:cardId/restore", async (req: AuthRequest
     await card.populate("agent", "username email");
     await card.populate("members", "username email");
     await card.populate("comments.author", "username email");
+    await writeAuditEvent({
+      req,
+      action: "card.unarchived",
+      message: `Restored card "${card.title}" from archive`,
+      category: "card",
+      channel: "cards",
+      board: { id: req.params.boardId, title: board.title },
+      list: { id: card.list },
+      card: { id: card._id, title: card.title },
+      target: { id: card._id, type: "card", label: card.title },
+    });
 
     res.json(card);
   } catch (error) {
@@ -225,6 +237,17 @@ router.delete("/:boardId/archived-cards/:cardId", async (req: AuthRequest, res: 
     }
 
     await Card.findByIdAndDelete(req.params.cardId);
+    await writeAuditEvent({
+      req,
+      action: "card.archived_deleted",
+      message: `Permanently deleted archived card "${card.title}"`,
+      category: "card",
+      channel: "cards",
+      board: { id: req.params.boardId, title: board.title },
+      list: { id: card.list },
+      card: { id: card._id, title: card.title },
+      target: { id: card._id, type: "card", label: card.title },
+    });
     res.json({ message: "Archived card permanently deleted" });
   } catch (error) {
     console.error("Delete archived card error:", error);
@@ -276,6 +299,11 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
     }
 
     const { title, description, background } = req.body;
+    const previous = {
+      title: board.title,
+      description: board.description,
+      background: board.background,
+    };
     if (title !== undefined) board.title = title;
     if (description !== undefined) board.description = description;
     if (background !== undefined) board.background = background;
@@ -283,6 +311,24 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
     await board.save();
     await board.populate("owner", "username email");
     await board.populate("members.user", "username email");
+    await writeAuditEvent({
+      req,
+      action: "board.settings_updated",
+      message: `Updated settings for board "${board.title}"`,
+      category: "board",
+      channel: "board_settings",
+      board: { id: board._id, title: board.title },
+      target: { id: board._id, type: "board", label: board.title },
+      meta: {
+        fields: Object.keys(req.body || {}),
+        previous,
+        next: {
+          title: board.title,
+          description: board.description,
+          background: board.background,
+        },
+      },
+    });
 
     res.json(board);
   } catch (error) {
@@ -362,6 +408,20 @@ router.post("/:boardId/members", async (req: AuthRequest, res: Response) => {
     await board.save();
     await board.populate("owner", "username email");
     await board.populate("members.user", "username email");
+    await writeAuditEvent({
+      req,
+      action: "board.member_added",
+      message: `Added ${user.username || user.email} to "${board.title}" as ${role}`,
+      category: "board_member",
+      channel: "board_members",
+      board: { id: board._id, title: board.title },
+      target: {
+        id: user._id,
+        type: "user",
+        label: user.username || user.email || String(user._id),
+      },
+      meta: { role, email: user.email },
+    });
 
     console.log(`✅ Added user ${user.email} (${user._id}) as ${role} to board "${board.title}" (${board._id})`);
     console.log(`   Board now has ${board.members.length} members:`, board.members.map((m: any) => ({ userId: m.user._id, role: m.role })));
@@ -402,6 +462,7 @@ router.patch(
       if (!targetMember) {
         return res.status(404).json({ message: "Member not found" });
       }
+      const previousRole = targetMember.role;
 
       // Prevent demoting the last admin
       if (targetMember.role === "admin" && role !== "admin") {
@@ -419,6 +480,24 @@ router.patch(
       await board.save();
       await board.populate("owner", "username email");
       await board.populate("members.user", "username email");
+      const targetUser = await User.findById(req.params.userId).select("username email");
+      await writeAuditEvent({
+        req,
+        action: "board.member_role_changed",
+        message: `Changed member role in "${board.title}" from ${previousRole} to ${role}`,
+        category: "board_member",
+        channel: "board_members",
+        board: { id: board._id, title: board.title },
+        target: {
+          id: req.params.userId,
+          type: "user",
+          label: targetUser?.username || targetUser?.email || req.params.userId,
+        },
+        meta: {
+          fromRole: previousRole,
+          toRole: role,
+        },
+      });
 
       res.json(board);
     } catch (error) {
@@ -455,6 +534,8 @@ router.delete(
       if (!targetMember) {
         return res.status(404).json({ message: "Member not found" });
       }
+      const removedRole = targetMember.role;
+      const removedUser = await User.findById(req.params.userId).select("username email");
 
       // Prevent removing the last admin
       if (targetMember.role === "admin") {
@@ -474,6 +555,20 @@ router.delete(
       await board.save();
       await board.populate("owner", "username email");
       await board.populate("members.user", "username email");
+      await writeAuditEvent({
+        req,
+        action: "board.member_removed",
+        message: `Removed ${removedUser?.username || removedUser?.email || req.params.userId} from "${board.title}"`,
+        category: "board_member",
+        channel: "board_members",
+        board: { id: board._id, title: board.title },
+        target: {
+          id: req.params.userId,
+          type: "user",
+          label: removedUser?.username || removedUser?.email || req.params.userId,
+        },
+        meta: { role: removedRole, selfRemoval: isSelf },
+      });
 
       res.json(board);
     } catch (error) {
