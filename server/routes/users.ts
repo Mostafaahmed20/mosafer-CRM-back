@@ -28,6 +28,7 @@ const hashToken = (token: string) =>
 const createRawToken = () => crypto.randomBytes(32).toString("hex");
 const isProd = env.IS_PROD;
 const appBaseUrl = env.APP_BASE_URL;
+const GOOGLE_ACCOUNT_RECOVERY_URL = "https://accounts.google.com/signin/recovery";
 const GLOBAL_USER_ROLES = ["user", "admin"] as const;
 
 async function trySendEmailWithFallback({
@@ -94,6 +95,12 @@ router.post("/register", registerRateLimit, async (req: Request, res: Response) 
     const normalizedEmail = String(email).toLowerCase().trim();
     const existingUser = await User.findOne({ email: normalizedEmail });
     if (existingUser) {
+      if (existingUser.authProvider === "google") {
+        return res.status(400).json({
+          message: "This email is registered with Google. Continue with Google Sign-In.",
+          code: "USE_GOOGLE_LOGIN",
+        });
+      }
       return res.status(400).json({ message: "Email already in use" });
     }
 
@@ -156,7 +163,10 @@ router.post("/login", loginRateLimit, async (req: Request, res: Response) => {
       return res.status(401).json({ message: "Invalid email or password" });
     }
     if (user.authProvider === "google") {
-      return res.status(400).json({ message: "Use Google login for this account" });
+      return res.status(400).json({
+        message: "This account uses Google Sign-In. Continue with Google.",
+        code: "USE_GOOGLE_LOGIN",
+      });
     }
 
     const isMatch = await user.comparePassword(password);
@@ -324,6 +334,14 @@ router.post("/forgot-password", forgotPasswordRateLimit, async (req: Request, re
     }
 
     const user = await User.findOne({ email: String(email).toLowerCase().trim() });
+    if (user?.authProvider === "google") {
+      return res.status(200).json({
+        message: "This email uses Google Sign-In. Reset your password from Google account recovery.",
+        code: "USE_GOOGLE_ACCOUNT_RECOVERY",
+        recoveryUrl: GOOGLE_ACCOUNT_RECOVERY_URL,
+      });
+    }
+
     if (user && user.authProvider === "local") {
       const resetToken = createRawToken();
       user.resetPasswordToken = hashToken(resetToken);
