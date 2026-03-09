@@ -12,8 +12,13 @@ export type AppUserAccessShape = {
   canViewAllAnalytics?: boolean;
 } | null | undefined;
 
+export function normalizeUserRole(role: unknown): "user" | "admin" {
+  if (typeof role !== "string") return "user";
+  return role.trim().toLowerCase() === "admin" ? "admin" : "user";
+}
+
 export function isGlobalAdmin(user: AppUserAccessShape): boolean {
-  return user?.role === "admin";
+  return normalizeUserRole(user?.role) === "admin";
 }
 
 export function canViewAllAnalytics(user: AppUserAccessShape): boolean {

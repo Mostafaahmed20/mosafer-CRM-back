@@ -17,6 +17,7 @@ import {
   buildEmailVerificationEmail,
   buildPasswordResetEmail,
 } from "../lib/email.js";
+import { normalizeUserRole } from "../lib/accessControl.js";
 
 const router = Router();
 const GOOGLE_CLIENT_ID = env.GOOGLE_CLIENT_ID;
@@ -70,7 +71,7 @@ function toAdminUserSummary(user: any) {
     _id: user._id,
     username: user.username,
     email: user.email,
-    role: user.role || "user",
+    role: normalizeUserRole(user.role),
     canViewAllAnalytics: Boolean(user.canViewAllAnalytics),
     emailVerified: Boolean(user.emailVerified),
     createdAt: user.createdAt,
@@ -188,7 +189,7 @@ router.post("/login", loginRateLimit, async (req: Request, res: Response) => {
         _id: user._id,
         username: user.username,
         email: user.email,
-        role: user.role || "user",
+        role: normalizeUserRole(user.role),
         canViewAllAnalytics: Boolean((user as any).canViewAllAnalytics),
       },
     });
@@ -249,7 +250,7 @@ router.post("/google", googleRateLimit, async (req: Request, res: Response) => {
         _id: user._id,
         username: user.username,
         email: user.email,
-        role: user.role || "user",
+        role: normalizeUserRole(user.role),
         canViewAllAnalytics: Boolean((user as any).canViewAllAnalytics),
       },
     });
@@ -424,7 +425,7 @@ router.patch(
         return res.status(404).json({ message: "User not found" });
       }
 
-      if (canViewAllAnalytics && user.role !== "admin") {
+      if (canViewAllAnalytics && normalizeUserRole(user.role) !== "admin") {
         return res.status(400).json({
           message: "Analytics access can only be enabled for users with admin role",
         });
@@ -475,7 +476,7 @@ router.patch(
   async (req: AuthRequest, res: Response) => {
     try {
       const { role } = req.body ?? {};
-      const normalizedRole = typeof role === "string" ? role.trim() : "";
+      const normalizedRole = typeof role === "string" ? role.trim().toLowerCase() : "";
 
       if (!GLOBAL_USER_ROLES.includes(normalizedRole as (typeof GLOBAL_USER_ROLES)[number])) {
         return res.status(400).json({ message: 'Role must be "user" or "admin"' });
@@ -489,10 +490,10 @@ router.patch(
       }
 
       const nextRole = normalizedRole as "user" | "admin";
-      const currentRole = (user.role || "user") as "user" | "admin";
+      const currentRole = normalizeUserRole(user.role);
 
       if (currentRole === "admin" && nextRole !== "admin") {
-        const adminCount = await User.countDocuments({ role: "admin" });
+        const adminCount = await User.countDocuments({ role: /^\s*admin\s*$/i });
         const isSelf = String(user._id) === String(req.userId);
         if (adminCount <= 1) {
           return res.status(400).json({ message: "Cannot demote the last global admin" });

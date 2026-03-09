@@ -9,6 +9,7 @@ import {
   requireVerifiedEmail,
 } from "../middleware/auth.js";
 import { User } from "../models/User.js";
+import { normalizeUserRole } from "../lib/accessControl.js";
 
 const router = Router();
 
@@ -17,7 +18,7 @@ router.use(authMiddleware, requireVerifiedEmail);
 async function isAdminUser(userId?: string): Promise<boolean> {
   if (!userId) return false;
   const user = await User.findById(userId).select("role");
-  return (user as any)?.role === "admin";
+  return normalizeUserRole((user as any)?.role) === "admin";
 }
 
 function escapeRegex(value: string): string {

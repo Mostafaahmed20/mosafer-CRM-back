@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { User } from "../models/User.js";
 import { env } from "../config/env.js";
+import { normalizeUserRole } from "../lib/accessControl.js";
 
 const JWT_SECRET = env.JWT_SECRET;
 
@@ -39,7 +40,7 @@ export async function authMiddleware(
     req.userId = String(user._id);
     req.user = {
       id: String(user._id),
-      role: (user.role || "user") as "user" | "admin",
+      role: normalizeUserRole(user.role),
       emailVerified: Boolean(user.emailVerified),
       canViewAllAnalytics: Boolean((user as any).canViewAllAnalytics),
       username: user.username,
