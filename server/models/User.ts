@@ -5,6 +5,7 @@ export interface IUser extends Document {
   username: string;
   email: string;
   role: "user" | "admin";
+  workflowRoles?: Array<"sales" | "operations" | "accounting">;
   canViewAllAnalytics: boolean;
   password?: string;
   authProvider: "local" | "google";
@@ -27,6 +28,12 @@ const userSchema = new mongoose.Schema<IUser>(
       default: "user",
       lowercase: true,
       trim: true,
+    },
+    // Undefined means a legacy account. Authorization keeps legacy accounts working
+    // with all workflow access until an administrator assigns specific departments.
+    workflowRoles: {
+      type: [{ type: String, enum: ["sales", "operations", "accounting"] }],
+      default: undefined,
     },
     canViewAllAnalytics: { type: Boolean, default: false },
     password: { type: String, required: false },

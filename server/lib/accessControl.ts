@@ -12,6 +12,21 @@ export type AppUserAccessShape = {
   canViewAllAnalytics?: boolean;
 } | null | undefined;
 
+export const WORKFLOW_ROLES = ["sales", "operations", "accounting"] as const;
+export type WorkflowRole = (typeof WORKFLOW_ROLES)[number];
+
+export function normalizeWorkflowRoles(value: unknown, globalRole?: unknown): WorkflowRole[] {
+  if (normalizeUserRole(globalRole) === "admin") return [...WORKFLOW_ROLES];
+  if (!Array.isArray(value)) return [...WORKFLOW_ROLES]; // Existing accounts retain access.
+  return [...new Set(value.filter((role): role is WorkflowRole =>
+    typeof role === "string" && (WORKFLOW_ROLES as readonly string[]).includes(role.trim().toLowerCase())
+  ).map((role) => role.trim().toLowerCase() as WorkflowRole))];
+}
+
+export function hasWorkflowRole(user: { role?: unknown; workflowRoles?: unknown } | null | undefined, required: WorkflowRole): boolean {
+  return normalizeWorkflowRoles(user?.workflowRoles, user?.role).includes(required);
+}
+
 export function normalizeUserRole(role: unknown): "user" | "admin" {
   if (typeof role !== "string") return "user";
   return role.trim().toLowerCase() === "admin" ? "admin" : "user";

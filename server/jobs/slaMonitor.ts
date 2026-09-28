@@ -7,7 +7,7 @@ const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 export async function runSlaMonitorOnce() {
   logger.info({ event: "jobs.sla_monitor.start" }, "SLA monitor job started");
   const now = new Date();
-  const cards = await Card.find({ archived: { $ne: true } }).select(
+  const cards = await Card.find({ kind: { $ne: "daily_task" }, archived: { $ne: true } }).select(
     "_id slaDueAt slaType slaStatus createdAt type status dueComplete"
   );
 

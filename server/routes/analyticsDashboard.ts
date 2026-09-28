@@ -155,6 +155,7 @@ async function computeWindowMetrics(
 
   const [opened, resolvedFacet, firstResponseAgg] = await Promise.all([
     Card.countDocuments({
+      kind: { $ne: "daily_task" },
       list: { $in: listIds },
       createdAt: { $gte: start, $lt: end },
       archived: { $ne: true },
@@ -162,6 +163,7 @@ async function computeWindowMetrics(
     Card.aggregate<any>([
       {
         $match: {
+          kind: { $ne: "daily_task" },
           list: { $in: listIds },
           archived: { $ne: true },
           $or: [{ dueComplete: true }, { status: { $in: [...TERMINAL_STATUSES] } }],
@@ -189,6 +191,7 @@ async function computeWindowMetrics(
     Card.aggregate<any>([
       {
         $match: {
+          kind: { $ne: "daily_task" },
           list: { $in: listIds },
           createdAt: { $gte: start, $lt: end },
           archived: { $ne: true },
@@ -278,13 +281,14 @@ router.get("/dashboard", requireGlobalAnalyticsAccess, async (req: AnalyticsDash
       computeWindowMetrics(listIds, window.start, window.end),
       computeWindowMetrics(listIds, window.previousStart, window.previousEnd),
       Card.countDocuments({
+        kind: { $ne: "daily_task" },
         list: { $in: listIds },
         archived: { $ne: true },
         dueComplete: { $ne: true },
         status: { $nin: [...TERMINAL_STATUSES] },
       }),
       Card.aggregate<any>([
-        { $match: { list: { $in: listIds }, archived: { $ne: true } } },
+        { $match: { kind: { $ne: "daily_task" }, list: { $in: listIds }, archived: { $ne: true } } },
         {
           $addFields: {
             completionTimestamp: { $ifNull: ["$completedAt", "$updatedAt"] },
@@ -327,6 +331,7 @@ router.get("/dashboard", requireGlobalAnalyticsAccess, async (req: AnalyticsDash
       Card.aggregate<any>([
         {
           $match: {
+            kind: { $ne: "daily_task" },
             list: { $in: listIds },
             archived: { $ne: true },
             createdAt: { $gte: window.start, $lt: window.end },
@@ -347,6 +352,7 @@ router.get("/dashboard", requireGlobalAnalyticsAccess, async (req: AnalyticsDash
       Card.aggregate<any>([
         {
           $match: {
+            kind: { $ne: "daily_task" },
             list: { $in: listIds },
             archived: { $ne: true },
             $or: [{ dueComplete: true }, { status: { $in: [...TERMINAL_STATUSES] } }],

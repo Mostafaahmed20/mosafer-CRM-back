@@ -1,6 +1,7 @@
 import { Router, Response } from "express";
 import { Notification } from "../models/Notification.js";
 import { AuthRequest, authMiddleware, requireVerifiedEmail } from "../middleware/auth.js";
+import { mapDailyOpsNotification } from "../lib/dailyOps.js";
 
 const router = Router();
 
@@ -11,12 +12,12 @@ router.get("/", async (req: AuthRequest, res: Response) => {
   try {
     const notifications = await Notification.find({ recipient: req.userId })
       .populate("sender", "username email")
-      .populate("card", "title")
+      .populate("card", "title kind")
       .populate("board", "title")
       .sort({ createdAt: -1 })
       .limit(20);
 
-    res.json(notifications);
+    res.json(notifications.map(mapDailyOpsNotification));
   } catch (error) {
     console.error("Get notifications error:", error);
     res.status(500).json({ message: "Server error" });

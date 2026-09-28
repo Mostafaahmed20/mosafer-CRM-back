@@ -18,6 +18,7 @@ import {
   buildPasswordResetEmail,
 } from "../lib/email.js";
 import { normalizeUserRole } from "../lib/accessControl.js";
+import { normalizeWorkflowRoles, WORKFLOW_ROLES } from "../lib/accessControl.js";
 
 const router = Router();
 const GOOGLE_CLIENT_ID = env.GOOGLE_CLIENT_ID;
@@ -52,17 +53,15 @@ async function trySendEmailWithFallback({
     return { delivered: true as const };
   } catch (error: any) {
     const message = String(error?.message || "");
-    const isResendSandboxRestriction =
-      message.includes("You can only send testing emails to your own email address") ||
-      message.includes("verify a domain at resend.com/domains");
-
-    if (isProd || !isResendSandboxRestriction) {
+    if (isProd) {
       throw error;
     }
 
     const url = `${appBaseUrl}${fallbackPath}?token=${encodeURIComponent(fallbackToken)}&email=${encodeURIComponent(to)}`;
-    console.warn(`[EMAIL-DEV-FALLBACK] Could not send email to ${to}. Open this URL manually: ${url}`);
-    return { delivered: false as const, devUrl: url };
+    console.warn(
+      `[EMAIL-DEV-FALLBACK] Could not send email to ${to}. Reason: ${message || "unknown"}. Open this URL manually: ${url}`
+    );
+    return { delivered: false as const, devUrl: url, reason: message || "email_delivery_failed" };
   }
 }
 
@@ -72,6 +71,7 @@ function toAdminUserSummary(user: any) {
     username: user.username,
     email: user.email,
     role: normalizeUserRole(user.role),
+    workflowRoles: normalizeWorkflowRoles((user as any).workflowRoles, user.role),
     canViewAllAnalytics: Boolean(user.canViewAllAnalytics),
     emailVerified: Boolean(user.emailVerified),
     createdAt: user.createdAt,
@@ -112,6 +112,7 @@ router.post("/register", registerRateLimit, async (req: Request, res: Response) 
       username: String(username).trim(),
       email: normalizedEmail,
       password,
+      workflowRoles: ["sales"],
       authProvider: "local",
       emailVerified: false,
       emailVerificationToken: verificationTokenHash,
@@ -190,6 +191,7 @@ router.post("/login", loginRateLimit, async (req: Request, res: Response) => {
         username: user.username,
         email: user.email,
         role: normalizeUserRole(user.role),
+        workflowRoles: normalizeWorkflowRoles((user as any).workflowRoles, user.role),
         canViewAllAnalytics: Boolean((user as any).canViewAllAnalytics),
       },
     });
@@ -231,6 +233,7 @@ router.post("/google", googleRateLimit, async (req: Request, res: Response) => {
         authProvider: "google",
         googleId,
         emailVerified: true,
+        workflowRoles: ["sales"],
       });
     } else {
       user.authProvider = user.authProvider || "google";
@@ -251,6 +254,7 @@ router.post("/google", googleRateLimit, async (req: Request, res: Response) => {
         username: user.username,
         email: user.email,
         role: normalizeUserRole(user.role),
+        workflowRoles: normalizeWorkflowRoles((user as any).workflowRoles, user.role),
         canViewAllAnalytics: Boolean((user as any).canViewAllAnalytics),
       },
     });
@@ -419,7 +423,7 @@ router.patch(
       }
 
       const user = await User.findById(req.params.userId).select(
-        "_id username email role canViewAllAnalytics emailVerified createdAt updatedAt"
+        "_id username email role workflowRoles canViewAllAnalytics emailVerified createdAt updatedAt"
       );
       if (!user) {
         return res.status(404).json({ message: "User not found" });
@@ -454,7 +458,7 @@ router.get(
   async (_req: AuthRequest, res: Response) => {
     try {
       const users = await User.find({})
-        .select("_id username email role canViewAllAnalytics emailVerified createdAt updatedAt")
+        .select("_id username email role workflowRoles canViewAllAnalytics emailVerified createdAt updatedAt")
         .sort({ createdAt: -1 });
 
       res.json({
@@ -483,7 +487,7 @@ router.patch(
       }
 
       const user = await User.findById(req.params.userId).select(
-        "_id username email role canViewAllAnalytics emailVerified createdAt updatedAt"
+        "_id username email role workflowRoles canViewAllAnalytics emailVerified createdAt updatedAt"
       );
       if (!user) {
         return res.status(404).json({ message: "User not found" });
@@ -518,6 +522,25 @@ router.patch(
       console.error("Update global role error:", error);
       res.status(500).json({ message: "Server error" });
     }
+  }
+);
+
+router.patch(
+  "/admin/:userId/workflow-roles",
+  authMiddleware,
+  requireVerifiedEmail,
+  requireGlobalAdmin,
+  async (req: AuthRequest, res: Response) => {
+    const input = req.body?.workflowRoles;
+    if (!Array.isArray(input) || input.some((role: unknown) => typeof role !== "string" || !WORKFLOW_ROLES.includes(role as any))) {
+      return res.status(400).json({ message: "workflowRoles must be a list of sales, operations, and/or accounting" });
+    }
+    const workflowRoles = [...new Set(input)] as Array<(typeof WORKFLOW_ROLES)[number]>;
+    const user = await User.findById(req.params.userId).select("_id username email role workflowRoles canViewAllAnalytics emailVerified createdAt updatedAt");
+    if (!user) return res.status(404).json({ message: "User not found" });
+    user.workflowRoles = workflowRoles;
+    await user.save();
+    res.json({ message: "Workflow roles updated", user: toAdminUserSummary(user) });
   }
 );
 

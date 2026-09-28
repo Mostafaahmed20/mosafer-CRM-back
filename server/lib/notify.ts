@@ -2,12 +2,15 @@ import { getSocketInstance } from "../socket.js";
 
 export function emitNotifications(
   notifications: Array<{
+    _id?: string;
     recipient: string;
     message: string;
     type: string;
     card?: any;
     board?: any;
+    sender?: any;
     commentText?: string;
+    createdAt?: string;
   }>
 ) {
   try {

@@ -21,12 +21,23 @@ import analyticsRoutes from "./routes/analytics.js";
 import analyticsDashboardRoutes from "./routes/analyticsDashboard.js";
 import adminTicketsRoutes from "./routes/adminTickets.js";
 import auditRoutes from "./routes/audit.js";
+import dailyOpsRoutes from "./routes/dailyOps.js";
+import quotationRoutes from "./routes/quotations.js";
+import travelServiceRoutes from "./routes/travelServices.js";
+import supplierRoutes from "./routes/suppliers.js";
+import orderRoutes from "./routes/orders.js";
+import orderPhase2Routes from "./routes/orderPhase2.js";
+import orderPhase3Routes from "./routes/orderPhase3.js";
+import orderPhase4Routes from "./routes/orderPhase4.js";
+import orderPhase5Routes from "./routes/orderPhase5.js";
 import { startDueDateReminderJob } from "./jobs/dueDateReminders.js";
 import { startBookingOpsAutomationJob } from "./jobs/bookingOpsAutomation.js";
 import { startSlaMonitorJob } from "./jobs/slaMonitor.js";
 import { startHandoverReminderJob } from "./jobs/handoverReminders.js";
+import { startDailyOpsGenerationJob } from "./jobs/dailyOpsGeneration.js";
 import { startBullMqJobs } from "./queues/startBullMqJobs.js";
 import { env } from "./config/env.js";
+import { isAllowedCorsOrigin } from "./lib/cors.js";
 import { setBullMqError, setBullMqRuntime, setJobMode } from "./queues/runtime.js";
 import { logger } from "./lib/logger.js";
 import { UPLOADS_DIR } from "./lib/uploads.js";
@@ -46,6 +57,7 @@ async function startServer() {
     startBookingOpsAutomationJob();
     startSlaMonitorJob();
     startHandoverReminderJob();
+    startDailyOpsGenerationJob();
     setBullMqRuntime(null);
     setJobMode("timer");
     logger.info("[Jobs] Timer mode active");
@@ -86,7 +98,7 @@ async function startServer() {
         callback(null, true);
         return;
       }
-      if (env.CORS_ORIGINS.includes(origin)) {
+      if (isAllowedCorsOrigin(origin, env.CORS_ORIGINS, !env.IS_PROD)) {
         callback(null, true);
         return;
       }
@@ -108,9 +120,18 @@ async function startServer() {
   app.use("/api/boards/:boardId/analytics", analyticsRoutes);
   app.use("/api/notifications", notificationRoutes);
   app.use("/api/customers", customerRoutes);
+  app.use("/api/suppliers", supplierRoutes);
+  app.use("/api/orders", orderRoutes);
+  app.use("/api/orders", orderPhase2Routes);
+  app.use("/api/orders", orderPhase3Routes);
+  app.use("/api/orders", orderPhase4Routes);
+  app.use("/api/orders", orderPhase5Routes);
   app.use("/api/analytics", analyticsDashboardRoutes);
   app.use("/api/admin/tickets", adminTicketsRoutes);
   app.use("/api/audit", auditRoutes);
+  app.use("/api/daily-ops", dailyOpsRoutes);
+  app.use("/api/boards/:boardId/requests", quotationRoutes);
+  app.use("/api/boards/:boardId/requests", travelServiceRoutes);
   app.use("/api/debug", debugRoutes);
   app.use("/api", notFoundApiHandler);
   app.use(apiErrorHandler);

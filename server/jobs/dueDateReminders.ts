@@ -29,6 +29,7 @@ export async function runDueDateReminderJobOnce(): Promise<ReminderRunResult> {
 
   const [cards24h, cards1h, cardsDue] = await Promise.all([
     Card.find({
+      kind: { $ne: "daily_task" },
       dueDate: { $gte: window24Start, $lte: window24End },
       dueComplete: { $ne: true },
       dueReminder24hSent: { $ne: true },
@@ -38,6 +39,7 @@ export async function runDueDateReminderJobOnce(): Promise<ReminderRunResult> {
       .populate("creator", "username email")
       .populate("list", "title board"),
     Card.find({
+      kind: { $ne: "daily_task" },
       dueDate: { $gte: window1Start, $lte: window1End },
       dueComplete: { $ne: true },
       dueReminder1hSent: { $ne: true },
@@ -47,6 +49,7 @@ export async function runDueDateReminderJobOnce(): Promise<ReminderRunResult> {
       .populate("creator", "username email")
       .populate("list", "title board"),
     Card.find({
+      kind: { $ne: "daily_task" },
       dueDate: { $lte: now },
       dueComplete: { $ne: true },
       dueReminderDueSent: { $ne: true },

@@ -23,17 +23,19 @@ router.get("/", async (_req, res: Response) => {
     if (jobMode === "bullmq") {
       const runtime = getBullMqRuntime();
       if (runtime) {
-        const [dueCounts, bookingCounts, slaCounts, handoverCounts] = await Promise.all([
+        const [dueCounts, bookingCounts, slaCounts, handoverCounts, dailyOpsCounts] = await Promise.all([
           runtime.dueQueue.getJobCounts("active", "waiting", "completed", "failed", "delayed"),
           runtime.bookingQueue.getJobCounts("active", "waiting", "completed", "failed", "delayed"),
           runtime.slaQueue.getJobCounts("active", "waiting", "completed", "failed", "delayed"),
           runtime.handoverQueue.getJobCounts("active", "waiting", "completed", "failed", "delayed"),
+          runtime.dailyOpsQueue.getJobCounts("active", "waiting", "completed", "failed", "delayed"),
         ]);
         queues = {
           dueReminders: dueCounts,
           bookingOps: bookingCounts,
           slaMonitor: slaCounts,
           handoverReminders: handoverCounts,
+          dailyOpsGeneration: dailyOpsCounts,
         };
         try {
           const redisClient = await runtime.dueQueue.client;

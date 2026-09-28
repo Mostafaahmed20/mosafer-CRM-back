@@ -1,11 +1,15 @@
 import mongoose, { Document } from "mongoose";
 
 export interface ICard extends Document {
+  kind?: "ticket" | "daily_task";
   title: string;
   subject?: string;
   requester?: string;
   bookingRef?: string;
   agencyName?: string;
+  destination?: string;
+  travelerCount?: number;
+  travelServices?: ("Flight" | "Hotel" | "Tour" | "Transfer" | "Other")[];
   hotelName?: string;
   supplierName?: string;
   supplierConfirmationNumber?: string;
@@ -20,10 +24,37 @@ export interface ICard extends Document {
   sellToAgency?: number;
   type?: string;
   status?: string;
+  businessDate?: string;
+  shift?: string;
+  coverageSlotId?: mongoose.Types.ObjectId;
+  recurrenceTemplateId?: mongoose.Types.ObjectId;
+  taskWindow?: string;
+  scheduleWindow?: string;
+  channel?: string;
+  dutyLabel?: string;
+  dailyTaskOrigin?: "coverage_primary" | "coverage_additional" | "manual" | "template";
+  progressPercent?: number;
+  pendingReason?: string;
+  completionNote?: string;
+  carryForwardShift?: string;
+  carryForwardReason?: string;
   priority?: string;
   group?: string;
   agent?: mongoose.Types.ObjectId;
   source?: string;
+  salesStage?: "New" | "Contacted" | "Qualified" | "Quoted" | "Follow-up" | "Won" | "Lost";
+  qualificationStatus?: "Unqualified" | "Qualified" | "Not a fit";
+  leadNeed?: string;
+  leadBudget?: number;
+  travelDates?: string;
+  lossReason?: string;
+  followUpAt?: Date;
+  followUpChannel?: "WhatsApp" | "Email" | "Phone" | "Other";
+  followUpNote?: string;
+  followUpCompleted?: boolean;
+  accountingStatus?: "Not ready" | "Ready for accounting" | "Sent to accounting" | "Accounting received" | "Paid" | "Closed";
+  accountingReference?: string;
+  accountingNotes?: string;
   handoverStatus?: "Not set" | "Resolved in shift" | "Pending for next shift";
   handoverSummary?: string;
   handoverDone?: string;
@@ -39,6 +70,7 @@ export interface ICard extends Document {
   description: string;
   list: mongoose.Types.ObjectId;
   creator: mongoose.Types.ObjectId;
+  orderId?: mongoose.Types.ObjectId;
   position: number;
   dueDate?: Date;
   dueComplete: boolean;
@@ -62,14 +94,30 @@ export interface ICard extends Document {
     _id?: mongoose.Types.ObjectId;
     text: string;
     author: mongoose.Types.ObjectId;
+    parentCommentId?: mongoose.Types.ObjectId;
     createdAt: Date;
+    updatedAt?: Date;
+    deletedAt?: Date;
   }[];
   attachments: {
+    _id?: mongoose.Types.ObjectId;
     name: string;
     url: string;
     type: string;
+    uploadedBy?: mongoose.Types.ObjectId;
+    createdAt?: Date;
     cloudinaryPublicId?: string;
     cloudinaryResourceType?: string;
+  }[];
+  dailyTaskHandovers?: {
+    _id?: mongoose.Types.ObjectId;
+    fromShift: string;
+    toShift: string;
+    reason: string;
+    nextOwner?: mongoose.Types.ObjectId;
+    summary?: string;
+    createdBy?: mongoose.Types.ObjectId;
+    createdAt?: Date;
   }[];
   checklists: {
     _id?: mongoose.Types.ObjectId;
@@ -96,6 +144,8 @@ export interface ICard extends Document {
   updatedAt?: Date;
 }
 
+export const CARD_KINDS = ["ticket", "daily_task"] as const;
+
 export const CARD_STATUSES = [
   "New",
   "In Progress",
@@ -114,6 +164,11 @@ export const CARD_STATUSES = [
   "Open",
   "Pending",
   "Resolved",
+  "todo",
+  "in_progress",
+  "pending",
+  "done",
+  "carried_forward",
 ] as const;
 
 export const CARD_PAYMENT_STATUSES = [
@@ -125,11 +180,18 @@ export const CARD_PAYMENT_STATUSES = [
 
 const cardSchema = new mongoose.Schema<ICard>(
   {
+    kind: { type: String, enum: CARD_KINDS, default: "ticket", index: true },
     title: { type: String, required: true },
     subject: { type: String, default: "" },
     requester: { type: String, default: "" },
     bookingRef: { type: String, default: "" },
     agencyName: { type: String, default: "" },
+    destination: { type: String, default: "" },
+    travelerCount: { type: Number, default: 0, min: 0 },
+    travelServices: {
+      type: [{ type: String, enum: ["Flight", "Hotel", "Tour", "Transfer", "Other"] }],
+      default: [],
+    },
     hotelName: { type: String, default: "" },
     supplierName: { type: String, default: "" },
     supplierConfirmationNumber: { type: String, default: "" },
@@ -148,10 +210,41 @@ const cardSchema = new mongoose.Schema<ICard>(
     sellToAgency: { type: Number, default: 0 },
     type: { type: String, default: "Booking request" },
     status: { type: String, enum: CARD_STATUSES, default: "New" },
+    businessDate: { type: String, default: "", index: true },
+    shift: { type: String, default: "" },
+    coverageSlotId: { type: mongoose.Schema.Types.ObjectId, ref: "CoverageSlot" },
+    recurrenceTemplateId: { type: mongoose.Schema.Types.ObjectId, ref: "DailyTaskTemplate" },
+    taskWindow: { type: String, default: "" },
+    scheduleWindow: { type: String, default: "" },
+    channel: { type: String, default: "" },
+    dutyLabel: { type: String, default: "" },
+    dailyTaskOrigin: {
+      type: String,
+      enum: ["coverage_primary", "coverage_additional", "manual", "template"],
+      default: "manual",
+    },
+    progressPercent: { type: Number, default: 0, min: 0, max: 100 },
+    pendingReason: { type: String, default: "" },
+    completionNote: { type: String, default: "" },
+    carryForwardShift: { type: String, default: "" },
+    carryForwardReason: { type: String, default: "" },
     priority: { type: String, default: "Medium" },
     group: { type: String, default: "Operations" },
     agent: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
     source: { type: String, default: "Agency" },
+    salesStage: { type: String, enum: ["New", "Contacted", "Qualified", "Quoted", "Follow-up", "Won", "Lost"], default: "New" },
+    qualificationStatus: { type: String, enum: ["Unqualified", "Qualified", "Not a fit"], default: "Unqualified" },
+    leadNeed: { type: String, default: "" },
+    leadBudget: { type: Number, default: 0, min: 0 },
+    travelDates: { type: String, default: "" },
+    lossReason: { type: String, default: "" },
+    followUpAt: { type: Date },
+    followUpChannel: { type: String, enum: ["WhatsApp", "Email", "Phone", "Other"], default: "WhatsApp" },
+    followUpNote: { type: String, default: "" },
+    followUpCompleted: { type: Boolean, default: false },
+    accountingStatus: { type: String, enum: ["Not ready", "Ready for accounting", "Sent to accounting", "Accounting received", "Paid", "Closed"], default: "Not ready" },
+    accountingReference: { type: String, default: "" },
+    accountingNotes: { type: String, default: "" },
     handoverStatus: {
       type: String,
       enum: ["Not set", "Resolved in shift", "Pending for next shift"],
@@ -179,6 +272,7 @@ const cardSchema = new mongoose.Schema<ICard>(
       ref: "User",
       required: true,
     },
+    orderId: { type: mongoose.Schema.Types.ObjectId, ref: "Order", index: true },
     position: { type: Number, default: 0 },
     dueDate: { type: Date },
     dueComplete: { type: Boolean, default: false },
@@ -211,7 +305,10 @@ const cardSchema = new mongoose.Schema<ICard>(
           ref: "User",
           required: true,
         },
+        parentCommentId: { type: mongoose.Schema.Types.ObjectId, default: null },
         createdAt: { type: Date, default: Date.now },
+        updatedAt: { type: Date },
+        deletedAt: { type: Date },
       },
     ],
     attachments: [
@@ -219,8 +316,21 @@ const cardSchema = new mongoose.Schema<ICard>(
         name: { type: String },
         url: { type: String },
         type: { type: String },
+        uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        createdAt: { type: Date, default: Date.now },
         cloudinaryPublicId: { type: String, default: "" },
         cloudinaryResourceType: { type: String, default: "" },
+      },
+    ],
+    dailyTaskHandovers: [
+      {
+        fromShift: { type: String, default: "" },
+        toShift: { type: String, default: "" },
+        reason: { type: String, default: "" },
+        nextOwner: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        summary: { type: String, default: "" },
+        createdBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        createdAt: { type: Date, default: Date.now },
       },
     ],
     checklists: [
@@ -262,5 +372,9 @@ const cardSchema = new mongoose.Schema<ICard>(
   },
   { timestamps: true }
 );
+
+cardSchema.index({ kind: 1, list: 1 });
+cardSchema.index({ kind: 1, businessDate: 1, coverageSlotId: 1, dailyTaskOrigin: 1 });
+cardSchema.index({ kind: 1, businessDate: 1, recurrenceTemplateId: 1, shift: 1 });
 
 export const Card = mongoose.model<ICard>("Card", cardSchema);

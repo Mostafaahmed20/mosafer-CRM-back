@@ -21,6 +21,12 @@ export type CustomerDecisionRole = (typeof CUSTOMER_DECISION_ROLES)[number];
 export interface ICustomerProfile extends Document {
   owner: mongoose.Types.ObjectId;
   agencyName: string;
+  // `agencyName` is retained for existing records; new UI and API use customerName.
+  customerName?: string;
+  phone?: string;
+  country?: string;
+  language?: string;
+  bookingValue?: string;
   location: string;
   email: string;
   decisionRole: CustomerDecisionRole;
@@ -40,6 +46,11 @@ const customerProfileSchema = new mongoose.Schema<ICustomerProfile>(
       trim: true,
       index: true,
     },
+    customerName: { type: String, default: "", trim: true, index: true },
+    phone: { type: String, default: "", trim: true },
+    country: { type: String, default: "", trim: true },
+    language: { type: String, default: "", trim: true },
+    bookingValue: { type: String, default: "", trim: true },
     location: {
       type: String,
       required: true,

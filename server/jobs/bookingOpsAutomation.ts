@@ -140,6 +140,7 @@ export async function runBookingOpsAutomationOnce(): Promise<BookingOpsRunResult
   const in1dEnd = new Date(now.getTime() + 24 * 60 * 60 * 1000);
 
   const baseFilter = {
+    kind: { $ne: "daily_task" },
     archived: { $ne: true },
     status: { $in: ACTIVE_STATUSES },
   };
@@ -164,6 +165,7 @@ export async function runBookingOpsAutomationOnce(): Promise<BookingOpsRunResult
       .populate("members", "username email")
       .populate("list", "title board"),
     Card.find({
+      kind: { $ne: "daily_task" },
       archived: { $ne: true },
       status: { $in: CONFIRMATION_RELEVANT_STATUSES },
       confirmationEscalationSent: { $ne: true },

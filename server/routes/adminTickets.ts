@@ -104,7 +104,7 @@ async function getCardContext(cardId: string) {
     .populate("members", "username email")
     .populate("comments.author", "username email");
 
-  if (!card) return null;
+  if (!card || card.kind === "daily_task") return null;
 
   const list = await List.findById(card.list).select("_id title board archived");
   const board = list ? await Board.findById(list.board).select("_id title owner members") : null;
@@ -163,6 +163,7 @@ router.get("/", async (req: AdminTicketsRequest, res: Response) => {
     const sort = toMongoSort(sortInput.sortBy, sortInput.sortDir);
 
     const match: Record<string, any> = {};
+    match.kind = { $ne: "daily_task" };
 
     if (!includeArchived) {
       match.archived = { $ne: true };

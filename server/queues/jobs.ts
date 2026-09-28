@@ -3,6 +3,7 @@ export const JOBS = {
   bookingOps: "booking-ops",
   slaMonitor: "sla-monitor",
   handoverReminders: "handover-reminders",
+  dailyOpsGeneration: "daily-ops-generation",
 } as const;
 
 export const JOB_SCHEDULE_MS = {
@@ -10,4 +11,5 @@ export const JOB_SCHEDULE_MS = {
   bookingOps: 15 * 60 * 1000,
   slaMonitor: 5 * 60 * 1000,
   handoverReminders: 30 * 60 * 1000,
+  dailyOpsGeneration: 15 * 60 * 1000,
 } as const;

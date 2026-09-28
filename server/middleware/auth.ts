@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { User } from "../models/User.js";
 import { env } from "../config/env.js";
-import { normalizeUserRole } from "../lib/accessControl.js";
+import { normalizeUserRole, normalizeWorkflowRoles } from "../lib/accessControl.js";
 
 const JWT_SECRET = env.JWT_SECRET;
 
@@ -11,6 +11,7 @@ export interface AuthRequest extends Request {
   user?: {
     id: string;
     role: "user" | "admin";
+    workflowRoles: Array<"sales" | "operations" | "accounting">;
     emailVerified: boolean;
     canViewAllAnalytics: boolean;
     username?: string;
@@ -32,7 +33,7 @@ export async function authMiddleware(
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as { userId: string };
     const user = await User.findById(decoded.userId).select(
-      "_id role emailVerified canViewAllAnalytics username email"
+      "_id role workflowRoles emailVerified canViewAllAnalytics username email"
     );
     if (!user) {
       return res.status(401).json({ message: "User not found" });
@@ -41,6 +42,7 @@ export async function authMiddleware(
     req.user = {
       id: String(user._id),
       role: normalizeUserRole(user.role),
+      workflowRoles: normalizeWorkflowRoles((user as any).workflowRoles, user.role),
       emailVerified: Boolean(user.emailVerified),
       canViewAllAnalytics: Boolean((user as any).canViewAllAnalytics),
       username: user.username,
@@ -90,4 +92,11 @@ export async function requireVerifiedEmail(
   } catch {
     return res.status(500).json({ message: "Server error" });
   }
+}
+
+export function requireWorkflowRole(required: "sales" | "operations" | "accounting") {
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (req.user?.role === "admin" || req.user?.workflowRoles?.includes(required)) return next();
+    return res.status(403).json({ message: `${required[0].toUpperCase()}${required.slice(1)} role required`, code: "WORKFLOW_ROLE_REQUIRED", requiredRole: required });
+  };
 }

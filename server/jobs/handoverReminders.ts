@@ -19,6 +19,7 @@ export async function runHandoverReminderJobOnce(): Promise<HandoverReminderRunR
   const reminderCutoff = new Date(now.getTime() - CHECK_INTERVAL_MS);
 
   const cards = await Card.find({
+    kind: { $ne: "daily_task" },
     archived: { $ne: true },
     handoverPendingState: "Yes",
     handoverNextOwner: { $exists: true, $nin: [null, ""] },

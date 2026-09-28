@@ -2,6 +2,7 @@ import { Server as SocketServer } from "socket.io";
 import { Server } from "http";
 import jwt from "jsonwebtoken";
 import { env } from "./config/env.js";
+import { isAllowedCorsOrigin } from "./lib/cors.js";
 
 const JWT_SECRET = env.JWT_SECRET;
 
@@ -31,7 +32,13 @@ function getHandshakeToken(socket: Parameters<SocketServer["use"]>[0] extends (s
 export function setupSocket(server: Server) {
   const io = new SocketServer(server, {
     cors: {
-      origin: env.CORS_ORIGINS,
+      origin(origin, callback) {
+        if (!origin || isAllowedCorsOrigin(origin, env.CORS_ORIGINS, !env.IS_PROD)) {
+          callback(null, true);
+          return;
+        }
+        callback(new Error("CORS blocked"));
+      },
       methods: ["GET", "POST"],
     },
   });

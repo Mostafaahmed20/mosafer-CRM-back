@@ -4,6 +4,7 @@ import { runDueDateReminderJobOnce } from "../jobs/dueDateReminders.js";
 import { runBookingOpsAutomationOnce } from "../jobs/bookingOpsAutomation.js";
 import { runSlaMonitorOnce } from "../jobs/slaMonitor.js";
 import { runHandoverReminderJobOnce } from "../jobs/handoverReminders.js";
+import { runDailyOpsGenerationOnce } from "../jobs/dailyOpsGeneration.js";
 import { JOBS, JOB_SCHEDULE_MS } from "./jobs.js";
 import { setBullMqRuntime } from "./runtime.js";
 
@@ -24,6 +25,7 @@ export async function startBullMqJobs() {
   const bookingQueue = new Queue(JOBS.bookingOps, { connection, defaultJobOptions });
   const slaQueue = new Queue(JOBS.slaMonitor, { connection, defaultJobOptions });
   const handoverQueue = new Queue(JOBS.handoverReminders, { connection, defaultJobOptions });
+  const dailyOpsQueue = new Queue(JOBS.dailyOpsGeneration, { connection, defaultJobOptions });
 
   const dueWorker = new Worker(
     JOBS.dueReminders,
@@ -53,6 +55,13 @@ export async function startBullMqJobs() {
     },
     { connection }
   );
+  const dailyOpsWorker = new Worker(
+    JOBS.dailyOpsGeneration,
+    async () => {
+      await runDailyOpsGenerationOnce();
+    },
+    { connection }
+  );
 
   dueWorker.on("failed", (job, err) => {
     console.error(`[BullMQ] ${JOBS.dueReminders} failed`, job?.id, err);
@@ -65,6 +74,9 @@ export async function startBullMqJobs() {
   });
   handoverWorker.on("failed", (job, err) => {
     console.error(`[BullMQ] ${JOBS.handoverReminders} failed`, job?.id, err);
+  });
+  dailyOpsWorker.on("failed", (job, err) => {
+    console.error(`[BullMQ] ${JOBS.dailyOpsGeneration} failed`, job?.id, err);
   });
 
   await dueQueue.upsertJobScheduler(
@@ -87,18 +99,25 @@ export async function startBullMqJobs() {
     { every: JOB_SCHEDULE_MS.handoverReminders },
     { name: "run", data: {} }
   );
+  await dailyOpsQueue.upsertJobScheduler(
+    "recurring",
+    { every: JOB_SCHEDULE_MS.dailyOpsGeneration },
+    { name: "run", data: {} }
+  );
 
-  console.log("[BullMQ] Workers started for due reminders, booking ops, SLA monitor, and handover reminders");
+  console.log("[BullMQ] Workers started for due reminders, booking ops, SLA monitor, handover reminders, and daily ops generation");
 
   const runtime = {
     dueQueue,
     bookingQueue,
     slaQueue,
     handoverQueue,
+    dailyOpsQueue,
     dueWorker,
     bookingWorker,
     slaWorker,
     handoverWorker,
+    dailyOpsWorker,
   };
   setBullMqRuntime(runtime);
   return runtime;
