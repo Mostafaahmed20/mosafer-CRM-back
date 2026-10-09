@@ -20,6 +20,7 @@ import customerRoutes from "./routes/customers.js";
 import analyticsRoutes from "./routes/analytics.js";
 import analyticsDashboardRoutes from "./routes/analyticsDashboard.js";
 import adminTicketsRoutes from "./routes/adminTickets.js";
+import adminReportsRoutes from "./routes/adminReports.js";
 import auditRoutes from "./routes/audit.js";
 import dailyOpsRoutes from "./routes/dailyOps.js";
 import quotationRoutes from "./routes/quotations.js";
@@ -130,6 +131,7 @@ async function startServer() {
   app.use("/api/orders", orderPhase5Routes);
   app.use("/api/analytics", analyticsDashboardRoutes);
   app.use("/api/admin/tickets", adminTicketsRoutes);
+  app.use("/api/admin/reports", adminReportsRoutes);
   app.use("/api/audit", auditRoutes);
   app.use("/api/daily-ops", dailyOpsRoutes);
   app.use("/api/boards/:boardId/requests", quotationRoutes);
