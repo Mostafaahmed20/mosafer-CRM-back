@@ -1,6 +1,8 @@
 import { Response, Router } from "express";
 import { Card } from "../models/Card.js";
 import { Quotation } from "../models/Quotation.js";
+import { CustomerProfile } from "../models/CustomerProfile.js";
+import { Order, calculateOrderSupplierCost } from "../models/Order.js";
 import { boardAuth, BoardAuthRequest } from "../middleware/boardAuth.js";
 import { writeAuditEvent } from "../lib/audit.js";
 import { authMiddleware, requireVerifiedEmail, requireWorkflowRole } from "../middleware/auth.js";
@@ -81,6 +83,94 @@ router.patch("/:cardId/quotations/:quotationId", requireWorkflowRole("sales"), a
     }
   }
   res.json(quotation);
+});
+
+router.post("/:cardId/quotations/:quotationId/convert-to-order", requireWorkflowRole("sales"), async (req: BoardAuthRequest, res: Response) => {
+  const card = await getRequest(req.params.cardId, req.params.boardId);
+  if (!card) return res.status(404).json({ message: "Travel request not found" });
+
+  const quotation = await Quotation.findOne({ _id: req.params.quotationId, card: card._id, status: "Accepted" });
+  if (!quotation) return res.status(409).json({ message: "Accept the quotation before creating the sale" });
+
+  const customerId = String(req.body?.customerId || "").trim();
+  if (!customerId) return res.status(400).json({ message: "Choose a customer before creating the sale" });
+
+  const customer = await CustomerProfile.findOne({ _id: customerId, owner: req.userId }).select("_id");
+  if (!customer) return res.status(404).json({ message: "Customer profile not found" });
+
+  const existing = await Order.findOne({ sourceCardId: card._id });
+  if (existing) return res.json({ order: existing, duplicate: true });
+
+  const productTypeFor = (serviceType: string) => {
+    const normalized = serviceType.toLowerCase();
+    if (normalized === "flight") return "flight";
+    if (normalized === "hotel") return "hotel";
+    if (normalized === "tour") return "package";
+    if (normalized === "transfer") return "transfer";
+    return "other";
+  };
+
+  const items = quotation.lines
+    .filter((line) => String(line.description || "").trim())
+    .map((line) => ({
+      productType: productTypeFor(line.serviceType),
+      description: String(line.description).trim(),
+      quantity: Math.max(1, Number(line.quantity || 1)),
+      salePrice: Math.max(0, Number(line.sellingRate || 0)),
+      supplierCost: Math.max(0, Number(line.netRate || 0)),
+      tax: 0,
+      commission: 0,
+      status: "draft",
+      supplierReference: "",
+      metadata: { supplierName: String(line.supplierName || "").trim() },
+    }));
+
+  if (!items.length) return res.status(400).json({ message: "Add at least one service to the quotation" });
+
+  const saleSubtotal = items.reduce((total, item) => total + item.quantity * item.salePrice, 0);
+  const order = await Order.create({
+    orderNumber: `ORD-${Date.now()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`,
+    customerId: customer._id,
+    ownerId: req.userId,
+    currency: quotation.currency,
+    status: "confirmed",
+    accountingStatus: "not_ready",
+    salesChannel: "chat",
+    saleSubtotal,
+    taxes: 0,
+    serviceFees: 0,
+    markup: 0,
+    discounts: 0,
+    supplierTaxes: 0,
+    paymentFees: 0,
+    supplierCost: calculateOrderSupplierCost(items),
+    source: "quotation",
+    sourceCardId: card._id,
+    sourceQuotationId: quotation._id,
+    sourceBoardId: req.params.boardId,
+    sourceListId: card.list,
+    statusHistory: [{ status: "confirmed", reason: "Client accepted quotation", changedBy: String(req.userId), changedAt: new Date() }],
+    items,
+  });
+
+  card.salesStage = "Won";
+  card.status = "Closed";
+  card.orderId = order._id;
+  card.accountingStatus = "Ready for accounting";
+  card.dueComplete = true;
+  card.completedAt = new Date();
+  await card.save();
+
+  await writeAuditEvent({
+    req,
+    action: "sale.created_from_quotation",
+    message: `Created sale ${order.orderNumber} from accepted quotation v${quotation.version}`,
+    category: "sales",
+    target: { id: order._id, type: "order", label: order.orderNumber },
+    meta: { cardId: String(card._id), quotationId: String(quotation._id), customerId, customerTotal: order.customerTotal, supplierCost: order.supplierCost, grossMargin: order.grossMargin },
+  });
+
+  res.status(201).json({ order, card, duplicate: false });
 });
 
 export default router;

@@ -161,7 +161,7 @@ router.post("/", boardAuth("guest"), async (req: BoardAuthRequest, res: Response
       destination: String(destination || "").trim(),
       travelerCount: Number.isFinite(Number(travelerCount)) ? Math.max(0, Number(travelerCount)) : 0,
       travelServices: Array.isArray(travelServices)
-        ? travelServices.filter((service) => ["Flight", "Hotel", "Tour", "Transfer", "Other"].includes(service))
+        ? travelServices.filter((service) => ["Flight", "Hotel", "Tour", "Transfer", "Package", "Other"].includes(service))
         : [],
       hotelName: hotelName || "",
       type: type || "Travel request",
