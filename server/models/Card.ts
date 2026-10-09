@@ -9,7 +9,7 @@ export interface ICard extends Document {
   agencyName?: string;
   destination?: string;
   travelerCount?: number;
-  travelServices?: ("Flight" | "Hotel" | "Tour" | "Transfer" | "Other")[];
+  travelServices?: ("Flight" | "Hotel" | "Tour" | "Transfer" | "Package" | "Other")[];
   hotelName?: string;
   supplierName?: string;
   supplierConfirmationNumber?: string;
@@ -69,6 +69,7 @@ export interface ICard extends Document {
   handoverReminderCount?: number;
   description: string;
   list: mongoose.Types.ObjectId;
+  orderId?: mongoose.Types.ObjectId;
   creator: mongoose.Types.ObjectId;
   position: number;
   dueDate?: Date;
@@ -188,7 +189,7 @@ const cardSchema = new mongoose.Schema<ICard>(
     destination: { type: String, default: "" },
     travelerCount: { type: Number, default: 0, min: 0 },
     travelServices: {
-      type: [{ type: String, enum: ["Flight", "Hotel", "Tour", "Transfer", "Other"] }],
+      type: [{ type: String, enum: ["Flight", "Hotel", "Tour", "Transfer", "Package", "Other"] }],
       default: [],
     },
     hotelName: { type: String, default: "" },
@@ -266,6 +267,7 @@ const cardSchema = new mongoose.Schema<ICard>(
       ref: "List",
       required: true,
     },
+    orderId: { type: mongoose.Schema.Types.ObjectId, ref: "Order", index: true },
     creator: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
