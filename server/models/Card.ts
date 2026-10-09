@@ -52,7 +52,7 @@ export interface ICard extends Document {
   followUpChannel?: "WhatsApp" | "Email" | "Phone" | "Other";
   followUpNote?: string;
   followUpCompleted?: boolean;
-  accountingStatus?: "Not ready" | "Ready for accounting" | "Sent to accounting" | "Accounting received" | "Paid" | "Closed";
+  accountingStatus?: "Not ready" | "Ready for accounting" | "Sent to accounting" | "Paid" | "Closed";
   accountingReference?: string;
   accountingNotes?: string;
   handoverStatus?: "Not set" | "Resolved in shift" | "Pending for next shift";
@@ -70,7 +70,6 @@ export interface ICard extends Document {
   description: string;
   list: mongoose.Types.ObjectId;
   creator: mongoose.Types.ObjectId;
-  orderId?: mongoose.Types.ObjectId;
   position: number;
   dueDate?: Date;
   dueComplete: boolean;
@@ -242,7 +241,7 @@ const cardSchema = new mongoose.Schema<ICard>(
     followUpChannel: { type: String, enum: ["WhatsApp", "Email", "Phone", "Other"], default: "WhatsApp" },
     followUpNote: { type: String, default: "" },
     followUpCompleted: { type: Boolean, default: false },
-    accountingStatus: { type: String, enum: ["Not ready", "Ready for accounting", "Sent to accounting", "Accounting received", "Paid", "Closed"], default: "Not ready" },
+    accountingStatus: { type: String, enum: ["Not ready", "Ready for accounting", "Sent to accounting", "Paid", "Closed"], default: "Not ready" },
     accountingReference: { type: String, default: "" },
     accountingNotes: { type: String, default: "" },
     handoverStatus: {
@@ -272,7 +271,6 @@ const cardSchema = new mongoose.Schema<ICard>(
       ref: "User",
       required: true,
     },
-    orderId: { type: mongoose.Schema.Types.ObjectId, ref: "Order", index: true },
     position: { type: Number, default: 0 },
     dueDate: { type: Date },
     dueComplete: { type: Boolean, default: false },

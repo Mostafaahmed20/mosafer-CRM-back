@@ -1,5 +1,4 @@
 type ReadinessCustomer = { agencyName?: string; location?: string; email?: string };
-type ReadinessPackage = { status?: string; startDate?: Date | string; endDate?: Date | string; items?: unknown[]; travelerIds?: unknown[] };
 type ReadinessOrderItem = { _id?: unknown; description?: string; salePrice?: number; supplierCost?: number };
 type ReadinessFulfillment = {
   orderItemId?: unknown;
@@ -16,7 +15,6 @@ export function isAccountingLocked(status: unknown): boolean {
 
 export function getAccountingReadiness(input: {
   customer?: ReadinessCustomer | null;
-  package?: ReadinessPackage | null;
   items?: ReadinessOrderItem[];
   fulfillments?: ReadinessFulfillment[];
   currency?: string;
@@ -26,7 +24,6 @@ export function getAccountingReadiness(input: {
 }) {
   const blockers: string[] = [];
   const customer = input.customer;
-  const pkg = input.package;
   const items = input.items || [];
   const fulfillments = input.fulfillments || [];
 
@@ -34,13 +31,6 @@ export function getAccountingReadiness(input: {
     blockers.push("Complete the customer profile name, location, and email");
   }
   if (!Number(input.travelerCount || 0)) blockers.push("Add at least one traveler to the sale");
-  if (!pkg || !["confirmed", "completed"].includes(String(pkg.status || "").toLowerCase())) {
-    blockers.push("Create and confirm the travel package");
-  } else {
-    if (!pkg.startDate || !pkg.endDate) blockers.push("Add package travel dates");
-    if (!Array.isArray(pkg.items) || pkg.items.length === 0) blockers.push("Add itinerary services to the package");
-    if (!Array.isArray(pkg.travelerIds) || pkg.travelerIds.length === 0) blockers.push("Assign at least one traveler to the package");
-  }
   if (!input.currency?.trim()) blockers.push("Set the order currency");
   if (!items.length) blockers.push("Add at least one priced service");
 

@@ -64,7 +64,8 @@ function toDateOnly(value?: Date | string): string | undefined {
 export function buildCustomerTripPack(input: CustomerTripPackInput) {
   const packageItems = Array.isArray(input.package?.items) ? input.package.items : [];
   const orderItems = Array.isArray(input.order.items) ? input.order.items : [];
-  const itinerarySource = packageItems.length ? packageItems : orderItems;
+  // Order.items is the canonical sale service list. Package items remain a legacy fallback.
+  const itinerarySource = orderItems.length ? orderItems : packageItems;
   const packageTravelerIds = new Set((input.package?.travelerIds || []).map(String));
   const travelers = (input.travelers || [])
     .filter((traveler) => !packageTravelerIds.size || packageTravelerIds.has(String(traveler._id)))
@@ -103,12 +104,17 @@ export function summarizeOrderPackage(input: {
   packageId?: string;
   packageName?: string;
   items?: IOrderPackageItem[];
+  orderItems?: Array<{ description?: string; productType?: string; serviceStart?: Date | string; serviceEnd?: Date | string }>;
   status?: string;
   travelerCount?: number;
   startDate?: Date | string | null;
   endDate?: Date | string | null;
 }) {
   const items = Array.isArray(input.items) ? input.items : [];
+  const orderItems = Array.isArray(input.orderItems) ? input.orderItems : [];
+  const serviceCount = orderItems.length || items.length;
+  const starts = orderItems.map((item) => item.serviceStart ? new Date(item.serviceStart) : undefined).filter((date): date is Date => Boolean(date && !Number.isNaN(date.getTime())));
+  const ends = orderItems.map((item) => item.serviceEnd ? new Date(item.serviceEnd) : undefined).filter((date): date is Date => Boolean(date && !Number.isNaN(date.getTime())));
   const status = String(input.status || "draft").toLowerCase();
 
   return {
@@ -116,11 +122,11 @@ export function summarizeOrderPackage(input: {
     packageName: String(input.packageName || "Travel package").trim(),
     status,
     travelerCount: Number(input.travelerCount || 0),
-    itemCount: items.length,
-    totalServices: items.length,
-    startDate: input.startDate ? new Date(input.startDate) : undefined,
-    endDate: input.endDate ? new Date(input.endDate) : undefined,
-    hasSchedule: items.some((item) => Boolean(item.startDate || item.endDate)),
+    itemCount: serviceCount,
+    totalServices: serviceCount,
+    startDate: input.startDate ? new Date(input.startDate) : starts.length ? new Date(Math.min(...starts.map((date) => date.getTime()))) : undefined,
+    endDate: input.endDate ? new Date(input.endDate) : ends.length ? new Date(Math.max(...ends.map((date) => date.getTime()))) : undefined,
+    hasSchedule: items.some((item) => Boolean(item.startDate || item.endDate)) || orderItems.some((item) => Boolean(item.serviceStart || item.serviceEnd)),
   };
 }
 

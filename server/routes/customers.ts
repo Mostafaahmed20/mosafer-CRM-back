@@ -7,87 +7,13 @@ import {
   AuthRequest,
   authMiddleware,
   requireVerifiedEmail,
-  requireWorkflowRole,
 } from "../middleware/auth.js";
 import { User } from "../models/User.js";
 import { normalizeUserRole } from "../lib/accessControl.js";
-import { Traveler } from "../models/Traveler.js";
-import { CustomerTraveler } from "../models/CustomerTraveler.js";
-import { writeAuditEvent } from "../lib/audit.js";
-import { Order } from "../models/Order.js";
-import { getAccessibleOrderFilter } from "../lib/orderAccess.js";
-import { Board } from "../models/Board.js";
 
 const router = Router();
 
 router.use(authMiddleware, requireVerifiedEmail);
-
-// Reusable traveler records belong to an agency customer; order records remain immutable snapshots.
-router.get("/:id/travelers", async (req: AuthRequest, res: Response) => {
-  const customer = await CustomerProfile.findById(req.params.id).select("_id owner");
-  if (!customer) return res.status(404).json({ message: "Customer not found" });
-  if (String(customer.owner) !== String(req.userId) && !await Order.exists({ customerId: customer._id, ...(await getAccessibleOrderFilter(String(req.userId))) })) return res.status(404).json({ message: "Customer not found" });
-
-  const links = await CustomerTraveler.find({ customerId: customer._id })
-    .populate({ path: "travelerId", match: { ownerId: customer.owner } })
-    .sort({ createdAt: -1 });
-  res.json(links.filter((link) => link.travelerId).map((link) => ({
-    ...((link.travelerId as any).toObject()),
-    relationship: link.relationship || "",
-  })));
-});
-
-router.post("/:id/travelers", requireWorkflowRole("operations"), async (req: AuthRequest, res: Response) => {
-  const customer = await CustomerProfile.findById(req.params.id).select("_id owner");
-  if (!customer) return res.status(404).json({ message: "Customer not found" });
-  if (String(customer.owner) !== String(req.userId) && !await Order.exists({ customerId: customer._id, ...(await getAccessibleOrderFilter(String(req.userId))) })) return res.status(404).json({ message: "Customer not found" });
-
-  let traveler: any;
-  const travelerId = String(req.body?.travelerId || "").trim();
-  if (travelerId) {
-    traveler = await Traveler.findOne({ _id: travelerId, ownerId: customer.owner });
-    if (!traveler) return res.status(404).json({ message: "Traveler not found" });
-  } else {
-    const firstName = String(req.body?.firstName || "").trim();
-    const lastName = String(req.body?.lastName || "").trim();
-    if (!firstName || !lastName) {
-      return res.status(400).json({ message: "firstName and lastName are required" });
-    }
-    const dateOfBirth = req.body?.dateOfBirth ? new Date(req.body.dateOfBirth) : undefined;
-    if (dateOfBirth && Number.isNaN(dateOfBirth.getTime())) {
-      return res.status(400).json({ message: "dateOfBirth must be a valid date" });
-    }
-    traveler = await Traveler.create({
-      ownerId: customer.owner,
-      firstName,
-      lastName,
-      displayNameArabic: String(req.body?.displayNameArabic || "").trim(),
-      email: String(req.body?.email || "").trim(),
-      phone: String(req.body?.phone || "").trim(),
-      nationality: String(req.body?.nationality || "").trim(),
-      dateOfBirth,
-    });
-  }
-
-  const relationship = String(req.body?.relationship || "").trim();
-  try {
-    const link = await CustomerTraveler.create({ customerId: customer._id, travelerId: traveler._id, relationship });
-    await writeAuditEvent({
-      req,
-      action: "customer.traveler_linked",
-      message: `Linked traveler ${traveler.firstName} ${traveler.lastName} to customer`,
-      category: "crm",
-      target: { _id: traveler._id, type: "traveler", label: `${traveler.firstName} ${traveler.lastName}` },
-      meta: { customerId: String(customer._id), relationship },
-    });
-    res.status(201).json({ ...traveler.toObject(), relationship: link.relationship });
-  } catch (error: any) {
-    if (error?.code === 11000) {
-      return res.status(409).json({ message: "Traveler is already linked to this customer" });
-    }
-    throw error;
-  }
-});
 
 async function isAdminUser(userId?: string): Promise<boolean> {
   if (!userId) return false;
@@ -144,20 +70,7 @@ function duplicateMessage(field: "agencyName" | "email") {
 // GET /api/customers - List current user's customer profiles
 router.get("/", async (req: AuthRequest, res: Response) => {
   try {
-    const boardId = String(req.query.boardId || "").trim();
-    let owners: unknown[] = [req.userId];
-    if (boardId) {
-      const board = await Board.findOne({
-        _id: boardId,
-        $or: [
-          { owner: req.userId },
-          { members: { $elemMatch: { user: req.userId } } },
-        ],
-      }).select("owner members");
-      if (!board) return res.status(404).json({ message: "Board not found" });
-      owners = [board.owner, ...board.members.map((member) => member.user)];
-    }
-    const customers = await CustomerProfile.find({ owner: { $in: owners } })
+    const customers = await CustomerProfile.find({ owner: req.userId })
       .sort({ createdAt: -1 });
 
     res.json(customers);
@@ -168,7 +81,7 @@ router.get("/", async (req: AuthRequest, res: Response) => {
 });
 
 // POST /api/customers - Create a customer profile for the current user
-router.post("/", requireWorkflowRole("sales"), async (req: AuthRequest, res: Response) => {
+router.post("/", async (req: AuthRequest, res: Response) => {
   try {
     const {
       agencyName, customerName,
@@ -249,7 +162,7 @@ router.post("/", requireWorkflowRole("sales"), async (req: AuthRequest, res: Res
 });
 
 // PATCH /api/customers/:id - Update current user's customer profile
-router.patch("/:id", requireWorkflowRole("sales"), async (req: AuthRequest, res: Response) => {
+router.patch("/:id", async (req: AuthRequest, res: Response) => {
   try {
     if (!(await isAdminUser(req.userId))) {
       return res.status(403).json({ message: "Admin role required" });
@@ -348,7 +261,7 @@ router.patch("/:id", requireWorkflowRole("sales"), async (req: AuthRequest, res:
 });
 
 // DELETE /api/customers/:id - Remove current user's customer profile
-router.delete("/:id", requireWorkflowRole("sales"), async (req: AuthRequest, res: Response) => {
+router.delete("/:id", async (req: AuthRequest, res: Response) => {
   try {
     if (!(await isAdminUser(req.userId))) {
       return res.status(403).json({ message: "Admin role required" });

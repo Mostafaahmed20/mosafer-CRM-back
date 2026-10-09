@@ -18,9 +18,8 @@ const router = Router();
 router.use(authMiddleware, requireVerifiedEmail);
 
 async function accountingReadinessForOrder(order: InstanceType<typeof Order>) {
-  const [customer, pkg, fulfillments, payments, travelers] = await Promise.all([
+  const [customer, fulfillments, payments, travelers] = await Promise.all([
     CustomerProfile.findOne({ _id: order.customerId, owner: order.ownerId }).select("agencyName location email"),
-    OrderPackage.findOne({ orderId: order._id, status: { $ne: "cancelled" } }).sort({ updatedAt: -1 }),
     OrderFulfillment.find({ orderId: order._id, status: { $ne: "cancelled" } }),
     OrderPayment.find({ orderId: order._id }),
     OrderTraveler.find({ orderId: order._id }),
@@ -28,7 +27,6 @@ async function accountingReadinessForOrder(order: InstanceType<typeof Order>) {
   const paymentTotals = calculateOrderPaymentTotals(payments.map((payment) => ({ amount: payment.amount, status: payment.status })));
   const readiness = getAccountingReadiness({
     customer,
-    package: pkg,
     items: order.items,
     fulfillments,
     currency: order.currency,
@@ -36,7 +34,7 @@ async function accountingReadinessForOrder(order: InstanceType<typeof Order>) {
     customerPayments: { paid: paymentTotals.net, pending: paymentTotals.pending },
     travelerCount: travelers.length,
   });
-  return { ...readiness, customer, pkg, fulfillments, paymentTotals, travelers };
+  return { ...readiness, customer, fulfillments, paymentTotals, travelers };
 }
 
 async function syncLinkedCardAccounting(order: InstanceType<typeof Order>, updates: Record<string, unknown>, userId?: string) {
@@ -290,6 +288,7 @@ router.get("/:orderId/packages", async (req: AuthRequest, res: Response) => {
       status: pkg.status,
       travelerCount: pkg.travelerIds?.length || 0,
       items: pkg.items,
+      orderItems: order.items,
       startDate: pkg.startDate,
       endDate: pkg.endDate,
     })),
@@ -311,6 +310,7 @@ router.get("/:orderId/packages/:packageId", async (req: AuthRequest, res: Respon
       status: pkg.status,
       travelerCount: pkg.travelerIds?.length || 0,
       items: pkg.items,
+      orderItems: order.items,
       startDate: pkg.startDate,
       endDate: pkg.endDate,
     }),
@@ -363,6 +363,7 @@ router.post("/:orderId/packages", requireWorkflowRole("operations"), async (req:
       status: pkg.status,
       travelerCount: pkg.travelerIds?.length || 0,
       items: pkg.items,
+      orderItems: order.items,
       startDate: pkg.startDate,
       endDate: pkg.endDate,
     }),
@@ -413,6 +414,7 @@ router.patch("/:orderId/packages/:packageId", requireWorkflowRole("operations"),
       status: pkg.status,
       travelerCount: pkg.travelerIds?.length || 0,
       items: pkg.items,
+      orderItems: order.items,
       startDate: pkg.startDate,
       endDate: pkg.endDate,
     }),

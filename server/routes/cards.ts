@@ -3,16 +3,11 @@ import multer from "multer";
 import path from "path";
 import fs from "fs";
 import { CARD_STATUSES, Card } from "../models/Card.js";
-import { Order } from "../models/Order.js";
-import { OrderFulfillment } from "../models/OrderFulfillment.js";
-import { Quotation } from "../models/Quotation.js";
-import { CustomerProfile } from "../models/CustomerProfile.js";
-import { TravelService } from "../models/TravelService.js";
 import { List } from "../models/List.js";
 import { Notification } from "../models/Notification.js";
 import { User } from "../models/User.js";
 import { Board } from "../models/Board.js";
-import { authMiddleware, requireVerifiedEmail, requireWorkflowRole } from "../middleware/auth.js";
+import { authMiddleware, requireVerifiedEmail } from "../middleware/auth.js";
 import { boardAuth, BoardAuthRequest } from "../middleware/boardAuth.js";
 import { getSocketInstance } from "../socket.js";
 import { recordActivity } from "../lib/activity.js";
@@ -48,140 +43,6 @@ const upload = multer({
 const router = Router({ mergeParams: true });
 
 router.use(authMiddleware, requireVerifiedEmail);
-
-router.post("/:cardId/convert-to-order", requireWorkflowRole("sales"), boardAuth("member"), async (req: BoardAuthRequest, res: Response) => {
-  const card = await Card.findById(req.params.cardId).populate("list", "board");
-  if (!card || String((card.list as any)?.board) !== String(req.params.boardId)) {
-    return res.status(404).json({ message: "Card not found" });
-  }
-
-  if (card.orderId) {
-    const existingOrder = await Order.findById(card.orderId);
-    if (existingOrder) {
-      if (!existingOrder.sourceCardId) {
-        existingOrder.sourceCardId = card._id;
-        existingOrder.sourceBoardId = req.params.boardId;
-        existingOrder.sourceListId = req.params.listId;
-        await existingOrder.save();
-      }
-      return res.json({ order: existingOrder, alreadyConverted: true });
-    }
-  }
-
-  const quotation = await Quotation.findOne({ card: card._id, status: "Accepted" }).sort({ version: -1 });
-  if (!quotation || !quotation.lines.length) {
-    return res.status(409).json({ message: "Send a quotation and mark it accepted before creating the order" });
-  }
-
-  const requestedCustomerId = String(req.body?.customerId || "").trim();
-  const accessibleCustomerOwners = [req.board.owner, ...((req.board.members || []).map((member: any) => member.user))];
-  const customer = requestedCustomerId
-    ? await CustomerProfile.findOne({ _id: requestedCustomerId, owner: { $in: accessibleCustomerOwners } })
-    : card.agencyName
-      ? await CustomerProfile.findOne({ agencyName: { $regex: `^${String(card.agencyName).replace(/[.*+?^${}()|[\\]\\]/g, "\\\\$&")}$`, $options: "i" }, owner: { $in: accessibleCustomerOwners } })
-      : null;
-
-  if (!customer) {
-    return res.status(400).json({ message: "A customer profile is required before converting this card", code: "CUSTOMER_REQUIRED" });
-  }
-
-  const productTypeFor = (serviceType: string) => {
-    const normalized = serviceType.toLowerCase();
-    if (["flight", "hotel", "transfer"].includes(normalized)) return normalized;
-    if (["tour", "activity"].includes(normalized)) return "activity";
-    return "other";
-  };
-  const orderItems = quotation.lines.map((line) => ({
-    productType: productTypeFor(line.serviceType),
-    description: line.description,
-    quantity: line.quantity,
-    salePrice: line.sellingRate,
-    supplierCost: line.netRate,
-    tax: 0,
-    commission: Math.max(0, line.sellingRate - line.netRate),
-    status: "confirmed",
-    metadata: {
-      sourceCardId: String(card._id),
-      sourceQuotationId: String(quotation._id),
-      sourceQuotationVersion: quotation.version,
-      supplierName: line.supplierName || "",
-    },
-  }));
-
-  let order;
-  try {
-    order = await Order.create({
-      customerId: customer._id,
-      ownerId: req.userId,
-      currency: quotation.currency || "USD",
-      status: "confirmed",
-      salesChannel: "card",
-      source: "accepted_quotation",
-      sourceCardId: card._id,
-      sourceBoardId: req.params.boardId,
-      sourceListId: req.params.listId,
-      saleSubtotal: quotation.lines.reduce((sum, line) => sum + line.quantity * line.sellingRate, 0),
-      supplierCost: quotation.lines.reduce((sum, line) => sum + line.quantity * line.netRate, 0),
-      items: orderItems,
-    });
-  } catch (error: any) {
-    if (error?.code !== 11000) throw error;
-    const existingOrder = await Order.findOne({ sourceCardId: card._id });
-    if (!existingOrder) throw error;
-    card.orderId = existingOrder._id;
-    card.status = "In Progress";
-    card.salesStage = "Won";
-    card.accountingStatus = "Not ready";
-    await card.save();
-    return res.json({ order: existingOrder, alreadyConverted: true });
-  }
-
-  await OrderFulfillment.insertMany(order.items.map((item, index) => ({
-    orderId: order._id,
-    orderItemId: item._id,
-    supplierName: quotation.lines[index]?.supplierName || "",
-    serviceType: quotation.lines[index]?.serviceType || "other",
-    status: "pending",
-    tasks: [{ title: "Confirm supplier booking", status: "pending" }],
-  })));
-
-  card.orderId = order._id;
-  // Customer acceptance creates the sale file; supplier booking work is still pending.
-  card.status = "In Progress";
-  card.salesStage = "Won";
-  card.accountingStatus = "Not ready";
-  card.accountingNotes = [card.accountingNotes, `Customer accepted quotation v${quotation.version}; order ${order.orderNumber} created. Supplier booking and settlement are pending.`]
-    .filter(Boolean)
-    .join("\n");
-  await card.save();
-
-  const auditResults = await Promise.allSettled([
-    writeAuditEvent({
-      req,
-      action: "lead.converted_to_order",
-      message: `Converted lead to order ${order.orderNumber}; supplier booking and settlement are pending`,
-      category: "sales",
-      board: { id: req.params.boardId },
-      card: { id: card._id, title: card.title },
-      target: { id: order._id, type: "order", label: order.orderNumber },
-      meta: { quotationId: String(quotation._id), quotationVersion: quotation.version },
-    }),
-    recordActivity({
-      boardId: String(req.params.boardId),
-      listId: String(req.params.listId),
-      cardId: String(card._id),
-      actorId: String(req.userId),
-      type: "lead.converted_to_order",
-      message: `converted lead to order ${order.orderNumber}; supplier booking and settlement are pending`,
-      meta: { orderId: String(order._id), quotationId: String(quotation._id), quotationVersion: quotation.version },
-    }),
-  ]);
-  for (const result of auditResults) {
-    if (result.status === "rejected") req.log?.error({ err: result.reason }, "Failed to record order handoff activity");
-  }
-
-  res.status(201).json({ order, alreadyConverted: false });
-});
 
 const TERMINAL_CARD_STATUSES = new Set(["Completed", "Cancelled", "Closed"]);
 
@@ -262,7 +123,7 @@ async function generateCaseReference(): Promise<string> {
 }
 
 // POST /api/boards/:boardId/lists/:listId/cards - Create a card
-router.post("/", requireWorkflowRole("sales"), boardAuth("guest"), async (req: BoardAuthRequest, res: Response) => {
+router.post("/", boardAuth("guest"), async (req: BoardAuthRequest, res: Response) => {
   try {
     const listId = req.params.listId as string;
     const boardId = req.params.boardId as string;
@@ -319,7 +180,7 @@ router.post("/", requireWorkflowRole("sales"), boardAuth("guest"), async (req: B
       followUpChannel: followUpChannel || "WhatsApp",
       followUpNote: String(followUpNote || "").trim(),
       followUpCompleted: Boolean(followUpCompleted),
-      accountingStatus: "Not ready",
+      accountingStatus: accountingStatus || "Not ready",
       accountingReference: String(accountingReference || "").trim(),
       accountingNotes: String(accountingNotes || "").trim(),
       description: description || "",
@@ -401,16 +262,13 @@ router.get("/:cardId", boardAuth(), async (req: BoardAuthRequest, res: Response)
 });
 
 // PATCH /api/boards/:boardId/lists/:listId/cards/:cardId - Update a card
-router.patch("/:cardId", requireWorkflowRole("sales"), boardAuth("guest"), async (req: BoardAuthRequest, res: Response) => {
+router.patch("/:cardId", boardAuth("guest"), async (req: BoardAuthRequest, res: Response) => {
   try {
     const boardId = req.params.boardId as string;
     const listId = req.params.listId as string;
     const existingCard = await Card.findById(req.params.cardId);
     if (!existingCard) {
       return res.status(404).json({ message: "Card not found" });
-    }
-    if (existingCard.accountingStatus === "Closed") {
-      return res.status(409).json({ message: "Closed sales files are locked; use an approved amendment workflow" });
     }
 
     // Guest role check: can only edit cards they're assigned to
@@ -426,9 +284,6 @@ router.patch("/:cardId", requireWorkflowRole("sales"), boardAuth("guest"), async
     }
 
     const updateData: Record<string, unknown> = { ...req.body };
-    if (Object.prototype.hasOwnProperty.call(updateData, "accountingStatus") && updateData.accountingStatus !== existingCard.accountingStatus) {
-      return res.status(409).json({ message: "Accounting status can only be changed through the accounting workflow" });
-    }
     const previousStatus = existingCard.status || "New";
     const previousArchived = Boolean(existingCard.archived);
     const previousAgentId = existingCard.agent ? existingCard.agent.toString() : "";
@@ -793,7 +648,7 @@ router.delete("/:cardId", boardAuth("admin"), async (req: BoardAuthRequest, res:
 });
 
 // POST /api/boards/:boardId/lists/:listId/cards/reorder - Reorder / move cards
-router.post("/reorder", requireWorkflowRole("sales"), boardAuth("member"), async (req: BoardAuthRequest, res: Response) => {
+router.post("/reorder", boardAuth("member"), async (req: BoardAuthRequest, res: Response) => {
   try {
     const boardId = req.params.boardId as string;
     const listId = req.params.listId as string;

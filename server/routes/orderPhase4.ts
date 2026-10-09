@@ -10,8 +10,10 @@ import {
   calculateFulfillmentProgress,
   findSupplierPaymentByIdempotencyKey,
 } from "../models/OrderFulfillment.js";
-import { AuthRequest, authMiddleware, requireVerifiedEmail, requireWorkflowRole } from "../middleware/auth.js";
+import { AuthRequest, authMiddleware, requireVerifiedEmail, requireWorkflowRole, requireAnyWorkflowRole } from "../middleware/auth.js";
 import { isAccountingLocked } from "../lib/accountingReadiness.js";
+import { storeOrderAttachment, uploadOrderAttachment } from "../lib/orderAttachments.js";
+import { safeUnlink } from "../lib/cloudinary.js";
 
 import { findAccessibleOrder, getAccessibleOrderFilter } from "../lib/orderAccess.js";
 
@@ -46,6 +48,40 @@ router.get("/:orderId/fulfillment", async (req: AuthRequest, res: Response) => {
       ? Math.round(fulfillment.reduce((sum, item) => sum + calculateFulfillmentProgress(item.tasks), 0) / fulfillment.length)
       : 0,
   });
+});
+
+router.post("/:orderId/fulfillment/:fulfillmentId/invoice-attachments", requireAnyWorkflowRole(["operations", "accounting"]), uploadOrderAttachment.single("file"), async (req: AuthRequest, res: Response) => {
+  const order = await findAccessibleOrder(req.params.orderId, String(req.userId));
+  if (!order) {
+    safeUnlink(req.file?.path);
+    return res.status(404).json({ message: "Order not found" });
+  }
+  if (isAccountingLocked(order.accountingStatus)) {
+    safeUnlink(req.file?.path);
+    return res.status(409).json({ message: "Supplier invoice attachments are locked after accounting handoff" });
+  }
+  const fulfillment = await OrderFulfillment.findOne({ _id: req.params.fulfillmentId, orderId: order._id });
+  if (!fulfillment) {
+    safeUnlink(req.file?.path);
+    return res.status(404).json({ message: "Supplier booking not found" });
+  }
+  if (!req.file) return res.status(400).json({ message: "Choose a supplier invoice file" });
+
+  const duplicate = fulfillment.supplierInvoiceAttachments.find((item) => item.name === req.file!.originalname && item.size === req.file!.size && item.type === req.file!.mimetype);
+  if (duplicate) {
+    safeUnlink(req.file.path);
+    return res.json({ fulfillment, attachment: duplicate, duplicate: true });
+  }
+
+  try {
+    const attachment = await storeOrderAttachment(req.file, String(req.userId));
+    fulfillment.supplierInvoiceAttachments.push(attachment as any);
+    await fulfillment.save();
+    res.status(201).json({ fulfillment, attachment });
+  } catch (error) {
+    safeUnlink(req.file.path);
+    throw error;
+  }
 });
 
 router.post("/:orderId/fulfillment/:fulfillmentId/supplier-payments", requireWorkflowRole("accounting"), async (req: AuthRequest, res: Response) => {
@@ -324,11 +360,12 @@ router.patch("/:orderId/fulfillment/:fulfillmentId", requireWorkflowRole("operat
     return res.status(409).json({ message: "This supplier booking reference is already used on this order" });
   }
 
-  const fields = ["supplierName", "supplierReference", "supplierInvoiceDueAt", "serviceType", "notes", "status", "bookedAt", "completedAt"] as const;
+  const fields = ["supplierName", "supplierReference", "hotelConfirmationNumber", "supplierInvoiceDueAt", "serviceType", "notes", "status", "bookedAt", "completedAt"] as const;
   const previousValues = {
     orderItemId: fulfillment.orderItemId,
     supplierName: fulfillment.supplierName,
     supplierReference: fulfillment.supplierReference,
+    hotelConfirmationNumber: fulfillment.hotelConfirmationNumber,
     supplierInvoiceReference: fulfillment.supplierInvoiceReference,
     supplierInvoiceAmount: fulfillment.supplierInvoiceAmount,
     supplierInvoiceDueAt: fulfillment.supplierInvoiceDueAt,
@@ -372,7 +409,7 @@ router.patch("/:orderId/fulfillment/:fulfillmentId", requireWorkflowRole("operat
     if (req.body?.[field] !== undefined) {
       const value = field === "supplierInvoiceDueAt"
         ? nextInvoiceDueAt
-        : typeof req.body[field] === "string" && ["supplierName", "supplierReference", "serviceType", "notes", "status"].includes(field)
+        : typeof req.body[field] === "string" && ["supplierName", "supplierReference", "hotelConfirmationNumber", "serviceType", "notes", "status"].includes(field)
           ? req.body[field].trim()
           : req.body[field];
       updates[field] = value;

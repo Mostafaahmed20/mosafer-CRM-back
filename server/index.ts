@@ -35,6 +35,7 @@ import { startBookingOpsAutomationJob } from "./jobs/bookingOpsAutomation.js";
 import { startSlaMonitorJob } from "./jobs/slaMonitor.js";
 import { startHandoverReminderJob } from "./jobs/handoverReminders.js";
 import { startDailyOpsGenerationJob } from "./jobs/dailyOpsGeneration.js";
+import { startFollowUpReminderJob } from "./jobs/followUpReminders.js";
 import { startBullMqJobs } from "./queues/startBullMqJobs.js";
 import { env } from "./config/env.js";
 import { isAllowedCorsOrigin } from "./lib/cors.js";
@@ -58,6 +59,7 @@ async function startServer() {
     startSlaMonitorJob();
     startHandoverReminderJob();
     startDailyOpsGenerationJob();
+    startFollowUpReminderJob();
     setBullMqRuntime(null);
     setJobMode("timer");
     logger.info("[Jobs] Timer mode active");
@@ -181,4 +183,3 @@ startServer().catch((error) => {
   logger.fatal({ err: error }, "Failed to start server");
   process.exit(1);
 });
-

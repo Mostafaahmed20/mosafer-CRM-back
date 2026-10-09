@@ -2,11 +2,14 @@ import { Response, Router } from "express";
 import { Order, deriveOrderStatusAfterPayment } from "../models/Order.js";
 import { OrderQuote, calculateQuoteTotal } from "../models/OrderQuote.js";
 import { OrderPayment, calculateOrderPaymentTotals } from "../models/OrderPayment.js";
+import { uploadOrderAttachment, storeOrderAttachment } from "../lib/orderAttachments.js";
+import { safeUnlink } from "../lib/cloudinary.js";
 import { OrderTraveler } from "../models/OrderTraveler.js";
+import { OrderPackage } from "../models/OrderPackage.js";
 import { Traveler } from "../models/Traveler.js";
 import { CustomerTraveler } from "../models/CustomerTraveler.js";
 import { writeAuditEvent } from "../lib/audit.js";
-import { AuthRequest, authMiddleware, requireVerifiedEmail, requireWorkflowRole } from "../middleware/auth.js";
+import { AuthRequest, authMiddleware, requireVerifiedEmail, requireWorkflowRole, requireAnyWorkflowRole } from "../middleware/auth.js";
 import { isAccountingLocked } from "../lib/accountingReadiness.js";
 
 import { findAccessibleOrder, getAccessibleOrderFilter } from "../lib/orderAccess.js";
@@ -129,7 +132,7 @@ router.get("/:orderId/travelers", async (req: AuthRequest, res: Response) => {
   res.json(travelers);
 });
 
-router.post("/:orderId/travelers", requireWorkflowRole("operations"), async (req: AuthRequest, res: Response) => {
+router.post("/:orderId/travelers", requireAnyWorkflowRole(["sales", "operations"]), async (req: AuthRequest, res: Response) => {
   const order = await findAccessibleOrder(req.params.orderId, String(req.userId));
   if (!order) return res.status(404).json({ message: "Order not found" });
   if (isAccountingLocked(order.accountingStatus)) return res.status(409).json({ message: "Order travelers are locked after accounting handoff" });
@@ -139,7 +142,9 @@ router.post("/:orderId/travelers", requireWorkflowRole("operations"), async (req
   if (travelerId) {
     const linked = await CustomerTraveler.exists({ customerId: order.customerId, travelerId });
     if (!linked) return res.status(400).json({ message: "Traveler is not linked to this order's customer" });
-    source = await Traveler.findOne({ _id: travelerId, ownerId: order.ownerId });
+    // The customer-traveler link is the authorization boundary. The profile may belong
+    // to a different board member than the person who converted the order.
+    source = await Traveler.findById(travelerId);
     if (!source) return res.status(404).json({ message: "Traveler not found" });
   }
 
@@ -155,18 +160,28 @@ router.post("/:orderId/travelers", requireWorkflowRole("operations"), async (req
     return res.status(400).json({ message: "dateOfBirth must be a valid date" });
   }
 
-  const snapshot = await OrderTraveler.create({
-    orderId: order._id,
-    travelerId: source?._id,
-    firstName,
-    lastName,
-    email: String(source?.email ?? req.body?.email ?? ""),
-    phone: String(source?.phone ?? req.body?.phone ?? ""),
-    passportNumber: String(req.body?.passportNumber || ""),
-    nationality: String(source?.nationality ?? req.body?.nationality ?? ""),
-    dateOfBirth,
-    notes: String(req.body?.notes || ""),
-  });
+  const existingSnapshot = source?._id
+    ? await OrderTraveler.findOne({ orderId: order._id, travelerId: source._id })
+    : null;
+  const snapshot = existingSnapshot || await OrderTraveler.create({
+      orderId: order._id,
+      travelerId: source?._id,
+      firstName,
+      lastName,
+      email: String(source?.email ?? req.body?.email ?? ""),
+      phone: String(source?.phone ?? req.body?.phone ?? ""),
+      passportNumber: String(req.body?.passportNumber || ""),
+      nationality: String(source?.nationality ?? req.body?.nationality ?? ""),
+      dateOfBirth,
+      notes: String(req.body?.notes || ""),
+    });
+
+  // Adding a traveler to the sale also assigns them to its active package.
+  const activePackage = await OrderPackage.findOne({ orderId: order._id, status: { $ne: "cancelled" } }).sort({ updatedAt: -1 });
+  if (activePackage && !activePackage.travelerIds.some((id) => String(id) === String(snapshot._id))) {
+    activePackage.travelerIds.push(snapshot._id);
+    await activePackage.save();
+  }
 
   await writeAuditEvent({
     req,
@@ -178,6 +193,40 @@ router.post("/:orderId/travelers", requireWorkflowRole("operations"), async (req
   });
 
   res.status(201).json(snapshot);
+});
+
+router.post("/:orderId/payments/:paymentId/attachments", requireWorkflowRole("accounting"), uploadOrderAttachment.single("file"), async (req: AuthRequest, res: Response) => {
+  const order = await findAccessibleOrder(req.params.orderId, String(req.userId));
+  if (!order) {
+    safeUnlink(req.file?.path);
+    return res.status(404).json({ message: "Order not found" });
+  }
+  if (isAccountingLocked(order.accountingStatus)) {
+    safeUnlink(req.file?.path);
+    return res.status(409).json({ message: "Payment attachments are locked after accounting handoff" });
+  }
+  const payment = await OrderPayment.findOne({ _id: req.params.paymentId, orderId: order._id });
+  if (!payment) {
+    safeUnlink(req.file?.path);
+    return res.status(404).json({ message: "Payment not found" });
+  }
+  if (!req.file) return res.status(400).json({ message: "Choose a receipt or payment proof file" });
+
+  const duplicate = payment.attachments.find((item) => item.name === req.file!.originalname && item.size === req.file!.size && item.type === req.file!.mimetype);
+  if (duplicate) {
+    safeUnlink(req.file.path);
+    return res.json({ payment, attachment: duplicate, duplicate: true });
+  }
+
+  try {
+    const attachment = await storeOrderAttachment(req.file, String(req.userId));
+    payment.attachments.push(attachment as any);
+    await payment.save();
+    res.status(201).json({ payment, attachment });
+  } catch (error) {
+    safeUnlink(req.file.path);
+    throw error;
+  }
 });
 
 export default router;

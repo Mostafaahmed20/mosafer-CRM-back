@@ -267,6 +267,7 @@ router.get("/dashboard", requireGlobalAnalyticsAccess, async (req: AnalyticsDash
           backlog: 0,
           firstResponse: 0,
         },
+        salesFunnel: { stageCounts: [], averageNewToWonHours: null, conversionTimeSampleSize: 0, lossReasons: [] },
         trend: [],
         teams: [],
         reports: {
@@ -386,6 +387,37 @@ router.get("/dashboard", requireGlobalAnalyticsAccess, async (req: AnalyticsDash
       sla: currentMetrics.sla,
       backlog: Number(backlog || 0),
       firstResponse: currentMetrics.firstResponse,
+    };
+
+    const [stageCounts, wonDurations, lossReasons] = await Promise.all([
+      Card.aggregate<any>([
+        { $match: { kind: { $ne: "daily_task" }, list: { $in: listIds } } },
+        { $group: { _id: { $ifNull: ["$salesStage", "New"] }, count: { $sum: 1 } } },
+        { $sort: { count: -1, _id: 1 } },
+        { $project: { _id: 0, stage: "$_id", count: 1 } },
+      ]),
+      Card.aggregate<any>([
+        { $match: { kind: { $ne: "daily_task" }, list: { $in: listIds }, salesStage: "Won" } },
+        { $project: {
+          firstNew: { $first: { $filter: { input: { $ifNull: ["$salesStageHistory", []] }, as: "entry", cond: { $eq: ["$$entry.stage", "New"] } } } },
+          firstWon: { $first: { $filter: { input: { $ifNull: ["$salesStageHistory", []] }, as: "entry", cond: { $eq: ["$$entry.stage", "Won"] } } } },
+        } },
+        { $match: { "firstNew.changedAt": { $ne: null }, "firstWon.changedAt": { $ne: null } } },
+        { $project: { hours: { $divide: [{ $subtract: ["$firstWon.changedAt", "$firstNew.changedAt"] }, 3600000] } } },
+        { $group: { _id: null, averageHours: { $avg: "$hours" }, sampleSize: { $sum: 1 } } },
+      ]),
+      Card.aggregate<any>([
+        { $match: { kind: { $ne: "daily_task" }, list: { $in: listIds }, salesStage: "Lost" } },
+        { $group: { _id: { $cond: [{ $eq: [{ $ifNull: ["$lossReason", ""] }, ""] }, "Unspecified", "$lossReason"] }, count: { $sum: 1 } } },
+        { $sort: { count: -1, _id: 1 } },
+        { $project: { _id: 0, reason: "$_id", count: 1 } },
+      ]),
+    ]);
+    const salesFunnel = {
+      stageCounts,
+      averageNewToWonHours: wonDurations[0]?.averageHours != null ? roundNumber(wonDurations[0].averageHours, 2) : null,
+      conversionTimeSampleSize: wonDurations[0]?.sampleSize || 0,
+      lossReasons,
     };
 
     type InternalTrendBucket = {
@@ -517,6 +549,7 @@ router.get("/dashboard", requireGlobalAnalyticsAccess, async (req: AnalyticsDash
       trend,
       teams,
       reports,
+      salesFunnel,
     });
   } catch (error) {
     console.error("Analytics dashboard error:", error);

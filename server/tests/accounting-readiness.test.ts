@@ -5,13 +5,6 @@ import { getAccountingReadiness, isAccountingLocked } from "../lib/accountingRea
 
 const completeCase = {
   customer: { agencyName: "Example Travel", location: "Cairo", email: "ops@example.test" },
-  package: {
-    status: "confirmed",
-    startDate: new Date("2026-10-10"),
-    endDate: new Date("2026-10-14"),
-    items: [{ title: "Return flight" }],
-    travelerIds: ["snapshot-1"],
-  },
   items: [{ _id: "service-1", description: "CAI-JED return tickets", salePrice: 300, supplierCost: 200 }],
   fulfillments: [{
     orderItemId: "service-1",
@@ -27,21 +20,20 @@ const completeCase = {
   travelerCount: 1,
 };
 
-test("accounting readiness passes when the customer, package, booking, costs, and settlement are complete", () => {
+test("accounting readiness passes when the customer, sale services, booking, costs, and settlement are complete", () => {
   assert.deepEqual(getAccountingReadiness(completeCase), { ready: true, blockers: [] });
 });
 
-test("accounting readiness reports missing records instead of allowing a premature handoff", () => {
+test("accounting readiness uses sale services and does not require duplicate package services", () => {
   const result = getAccountingReadiness({
     ...completeCase,
-    package: null,
     fulfillments: [],
     balance: 100,
     customerPayments: { paid: 0, pending: 100 },
   });
 
   assert.equal(result.ready, false);
-  assert.ok(result.blockers.includes("Create and confirm the travel package"));
+  assert.ok(!result.blockers.some((blocker) => blocker.toLowerCase().includes("package")));
   assert.ok(result.blockers.includes("Add supplier booking details for CAI-JED return tickets"));
   assert.ok(result.blockers.includes("Settle the customer balance before accounting handoff"));
   assert.ok(result.blockers.includes("Record and post the customer payment"));

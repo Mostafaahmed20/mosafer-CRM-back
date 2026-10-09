@@ -1,4 +1,5 @@
 import mongoose, { Document, type FilterQuery } from "mongoose";
+import type { IOrderAttachment } from "./OrderPayment.js";
 
 export type OrderFulfillmentStatus = "pending" | "booked" | "in_progress" | "completed" | "cancelled";
 export const ACTIVE_ORDER_FULFILLMENT_STATUSES: OrderFulfillmentStatus[] = ["pending", "booked", "in_progress", "completed"];
@@ -86,10 +87,12 @@ export interface IOrderFulfillment extends Document {
   supplierId?: mongoose.Types.ObjectId | string;
   supplierName?: string;
   supplierReference?: string;
+  hotelConfirmationNumber?: string;
   supplierReferenceKey?: string;
   supplierInvoiceReference?: string;
   supplierInvoiceAmount?: number;
   supplierInvoiceDueAt?: Date;
+  supplierInvoiceAttachments: IOrderAttachment[];
   supplierPayments: IOrderSupplierPayment[];
   serviceType?: string;
   status: OrderFulfillmentStatus;
@@ -146,6 +149,7 @@ export function buildFulfillmentHistory(
     "orderItemId",
     "supplierName",
     "supplierReference",
+    "hotelConfirmationNumber",
     "supplierInvoiceReference",
     "supplierInvoiceAmount",
     "supplierInvoiceDueAt",
@@ -235,10 +239,24 @@ const orderFulfillmentSchema = new mongoose.Schema<IOrderFulfillment>(
     supplierId: { type: mongoose.Schema.Types.ObjectId, ref: "Supplier" },
     supplierName: { type: String, default: "" },
     supplierReference: { type: String, default: "" },
+    hotelConfirmationNumber: { type: String, default: "" },
     supplierReferenceKey: { type: String, default: undefined, select: false },
     supplierInvoiceReference: { type: String, default: "" },
     supplierInvoiceAmount: { type: Number, min: 0 },
     supplierInvoiceDueAt: { type: Date },
+    supplierInvoiceAttachments: {
+      type: [{
+        name: { type: String, required: true },
+        url: { type: String, required: true },
+        type: { type: String, default: "application/octet-stream" },
+        size: { type: Number, default: 0 },
+        cloudinaryPublicId: { type: String, default: "" },
+        cloudinaryResourceType: { type: String, default: "" },
+        uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        uploadedAt: { type: Date, default: Date.now },
+      }],
+      default: [],
+    },
     supplierPayments: { type: [orderSupplierPaymentSchema], default: [] },
     serviceType: { type: String, default: "other" },
     status: { type: String, enum: ["pending", "booked", "in_progress", "completed", "cancelled"], default: "pending" },

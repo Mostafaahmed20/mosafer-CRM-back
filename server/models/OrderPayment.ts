@@ -2,6 +2,17 @@ import mongoose, { Document } from "mongoose";
 
 export type OrderPaymentStatus = "pending" | "posted" | "failed" | "refunded" | "cancelled";
 
+export interface IOrderAttachment {
+  name: string;
+  url: string;
+  type: string;
+  size: number;
+  cloudinaryPublicId?: string;
+  cloudinaryResourceType?: string;
+  uploadedBy?: mongoose.Types.ObjectId | string;
+  uploadedAt: Date;
+}
+
 export interface IOrderPayment extends Document {
   orderId: mongoose.Types.ObjectId | string;
   paymentMethod?: string;
@@ -14,6 +25,7 @@ export interface IOrderPayment extends Document {
   paidAt?: Date;
   refundedAt?: Date;
   notes?: string;
+  attachments: IOrderAttachment[];
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -100,6 +112,19 @@ const orderPaymentSchema = new mongoose.Schema<IOrderPayment>(
     paidAt: { type: Date },
     refundedAt: { type: Date },
     notes: { type: String, default: "" },
+    attachments: {
+      type: [{
+        name: { type: String, required: true },
+        url: { type: String, required: true },
+        type: { type: String, default: "application/octet-stream" },
+        size: { type: Number, default: 0 },
+        cloudinaryPublicId: { type: String, default: "" },
+        cloudinaryResourceType: { type: String, default: "" },
+        uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+        uploadedAt: { type: Date, default: Date.now },
+      }],
+      default: [],
+    },
   },
   { timestamps: true }
 );

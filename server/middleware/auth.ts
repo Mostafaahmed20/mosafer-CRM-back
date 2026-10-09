@@ -100,3 +100,14 @@ export function requireWorkflowRole(required: "sales" | "operations" | "accounti
     return res.status(403).json({ message: `${required[0].toUpperCase()}${required.slice(1)} role required`, code: "WORKFLOW_ROLE_REQUIRED", requiredRole: required });
   };
 }
+
+export function requireAnyWorkflowRole(required: Array<"sales" | "operations" | "accounting">) {
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (req.user?.role === "admin" || required.some((role) => req.user?.workflowRoles?.includes(role))) return next();
+    return res.status(403).json({
+      message: `${required.map((role) => `${role[0].toUpperCase()}${role.slice(1)}`).join(" or ")} role required`,
+      code: "WORKFLOW_ROLE_REQUIRED",
+      requiredRoles: required,
+    });
+  };
+}

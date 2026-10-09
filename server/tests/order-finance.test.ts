@@ -3,10 +3,28 @@ import test from "node:test";
 
 import {
   calculateOrderMetrics,
+  calculateOrderSupplierCost,
   deriveOrderStatusAfterPayment,
   deriveOrderStatusAfterSupplierBooking,
   setOrderItemActualSupplierCost,
 } from "../models/Order.js";
+import { describeLedgerDerivedOrderFields, getLedgerDerivedOrderFields } from "../lib/orderFinancialInput.js";
+
+test("generic order writes reject ledger-derived payment and supplier cost fields", () => {
+  const paymentOverride = getLedgerDerivedOrderFields({ amountPaid: 999999 });
+  const costOverride = getLedgerDerivedOrderFields({ supplierCost: 999999 });
+
+  assert.deepEqual(paymentOverride, ["amountPaid"]);
+  assert.deepEqual(costOverride, ["supplierCost"]);
+  assert.match(describeLedgerDerivedOrderFields(paymentOverride), /posted customer payments/);
+});
+
+test("order supplier cost is derived from service-level supplier estimates and quantities", () => {
+  assert.equal(calculateOrderSupplierCost([
+    { quantity: 2, supplierCost: 100.25 },
+    { quantity: 1, supplierCost: 250 },
+  ]), 450.5);
+});
 
 test("calculateOrderMetrics derives customerTotal, totalCost, grossMargin and balance", () => {
   const metrics = calculateOrderMetrics({

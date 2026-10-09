@@ -113,6 +113,7 @@ export interface IOrder extends Document {
   balance: number;
   source?: string;
   sourceCardId?: mongoose.Types.ObjectId | string;
+  sourceQuotationId?: mongoose.Types.ObjectId | string;
   sourceBoardId?: mongoose.Types.ObjectId | string;
   sourceListId?: mongoose.Types.ObjectId | string;
   travelDate?: Date;
@@ -154,6 +155,16 @@ export function calculateOrderMetrics(input: {
     grossMargin,
     balance,
   };
+}
+
+export function calculateOrderSupplierCost(items: Array<{ quantity?: number; supplierCost?: number }> = []) {
+  const total = items.reduce((sum, item) => {
+    const rawQuantity = Number(item.quantity || 1);
+    const quantity = Number.isFinite(rawQuantity) ? Math.max(1, rawQuantity) : 1;
+    const unitCost = Number(item.supplierCost || 0);
+    return sum + (Number.isFinite(unitCost) ? unitCost : 0) * quantity;
+  }, 0);
+  return Math.round((total + Number.EPSILON) * 100) / 100;
 }
 
 type SupplierCostOrder = {
@@ -270,6 +281,7 @@ const orderSchema = new mongoose.Schema<IOrder>(
     balance: { type: Number, default: 0 },
     source: { type: String, default: "manual" },
     sourceCardId: { type: mongoose.Schema.Types.ObjectId, ref: "Card", unique: true, sparse: true },
+    sourceQuotationId: { type: mongoose.Schema.Types.ObjectId, ref: "Quotation" },
     sourceBoardId: { type: mongoose.Schema.Types.ObjectId, ref: "Board" },
     sourceListId: { type: mongoose.Schema.Types.ObjectId, ref: "List" },
     travelDate: { type: Date },

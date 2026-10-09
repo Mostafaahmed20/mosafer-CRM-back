@@ -4,6 +4,7 @@ export const JOBS = {
   slaMonitor: "sla-monitor",
   handoverReminders: "handover-reminders",
   dailyOpsGeneration: "daily-ops-generation",
+  followUpReminders: "follow-up-reminders",
 } as const;
 
 export const JOB_SCHEDULE_MS = {
@@ -12,4 +13,5 @@ export const JOB_SCHEDULE_MS = {
   slaMonitor: 5 * 60 * 1000,
   handoverReminders: 30 * 60 * 1000,
   dailyOpsGeneration: 15 * 60 * 1000,
+  followUpReminders: 15 * 60 * 1000,
 } as const;

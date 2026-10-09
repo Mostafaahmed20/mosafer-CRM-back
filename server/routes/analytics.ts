@@ -79,6 +79,7 @@ router.get("/summary", async (req: AnalyticsRequest, res: Response) => {
           byGroup: [],
           bySource: [],
         },
+        salesFunnel: { stageCounts: [], averageNewToWonHours: null, lossReasons: [] },
       });
     }
 
@@ -88,7 +89,7 @@ router.get("/summary", async (req: AnalyticsRequest, res: Response) => {
     const next7DaysEnd = addDays(todayStart, 7);
 
     const [facet] = await Card.aggregate<any>([
-      { $match: { list: { $in: listIds } } },
+      { $match: { list: { $in: listIds }, kind: { $ne: "daily_task" } } },
       {
         $facet: {
           totals: [
@@ -256,6 +257,32 @@ router.get("/summary", async (req: AnalyticsRequest, res: Response) => {
       },
     ]);
 
+    const funnelMatch = { list: { $in: listIds }, kind: { $ne: "daily_task" } };
+    const [stageCounts, wonDurations, lossReasons] = await Promise.all([
+      Card.aggregate<any>([
+        { $match: funnelMatch },
+        { $group: { _id: { $ifNull: ["$salesStage", "New"] }, count: { $sum: 1 } } },
+        { $sort: { count: -1, _id: 1 } },
+        { $project: { _id: 0, stage: "$_id", count: 1 } },
+      ]),
+      Card.aggregate<any>([
+        { $match: { ...funnelMatch, salesStage: "Won" } },
+        { $project: {
+          firstNew: { $first: { $filter: { input: { $ifNull: ["$salesStageHistory", []] }, as: "entry", cond: { $eq: ["$$entry.stage", "New"] } } } },
+          firstWon: { $first: { $filter: { input: { $ifNull: ["$salesStageHistory", []] }, as: "entry", cond: { $eq: ["$$entry.stage", "Won"] } } } },
+        } },
+        { $match: { "firstNew.changedAt": { $ne: null }, "firstWon.changedAt": { $ne: null } } },
+        { $project: { hours: { $divide: [{ $subtract: ["$firstWon.changedAt", "$firstNew.changedAt"] }, 3600000] } } },
+        { $group: { _id: null, averageHours: { $avg: "$hours" }, sampleSize: { $sum: 1 } } },
+      ]),
+      Card.aggregate<any>([
+        { $match: { ...funnelMatch, salesStage: "Lost" } },
+        { $group: { _id: { $ifNull: [{ $cond: [{ $eq: [{ $ifNull: ["$lossReason", ""] }, ""] }, "Unspecified", "$lossReason"] }, "Unspecified"] }, count: { $sum: 1 } } },
+        { $sort: { count: -1, _id: 1 } },
+        { $project: { _id: 0, reason: "$_id", count: 1 } },
+      ]),
+    ]);
+
     res.json({
       boardId: req.params.boardId,
       generatedAt: new Date().toISOString(),
@@ -265,6 +292,12 @@ router.get("/summary", async (req: AnalyticsRequest, res: Response) => {
         byPriority: facet?.byPriority || [],
         byGroup: facet?.byGroup || [],
         bySource: facet?.bySource || [],
+      },
+      salesFunnel: {
+        stageCounts,
+        averageNewToWonHours: wonDurations[0]?.averageHours != null ? Number(wonDurations[0].averageHours.toFixed(2)) : null,
+        conversionTimeSampleSize: wonDurations[0]?.sampleSize || 0,
+        lossReasons,
       },
     });
   } catch (error) {

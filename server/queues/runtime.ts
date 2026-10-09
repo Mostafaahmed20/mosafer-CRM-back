@@ -8,11 +8,13 @@ type BullMqRuntime = {
   slaQueue: Queue;
   handoverQueue: Queue;
   dailyOpsQueue: Queue;
+  followUpRemindersQueue: Queue;
   dueWorker: Worker;
   bookingWorker: Worker;
   slaWorker: Worker;
   handoverWorker: Worker;
   dailyOpsWorker: Worker;
+  followUpRemindersWorker: Worker;
 };
 
 let mode: JobMode = "timer";

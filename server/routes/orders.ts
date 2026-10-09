@@ -1,11 +1,12 @@
 import { Response, Router } from "express";
-import { Order, ORDER_STATUSES, ORDER_ITEM_PRODUCT_TYPES } from "../models/Order.js";
+import { Order, ORDER_STATUSES, ORDER_ITEM_PRODUCT_TYPES, calculateOrderSupplierCost } from "../models/Order.js";
 import { OrderFulfillment, calculateSupplierInvoiceSettlement } from "../models/OrderFulfillment.js";
 import { AuthRequest, authMiddleware, requireVerifiedEmail, requireWorkflowRole } from "../middleware/auth.js";
 import { isAccountingLocked } from "../lib/accountingReadiness.js";
 import { writeAuditEvent } from "../lib/audit.js";
 
 import { findAccessibleOrder, getAccessibleOrderFilter } from "../lib/orderAccess.js";
+import { describeLedgerDerivedOrderFields, getLedgerDerivedOrderFields } from "../lib/orderFinancialInput.js";
 
 const router = Router();
 router.use(authMiddleware, requireVerifiedEmail);
@@ -23,7 +24,7 @@ function sanitizeOrderPayload(body: Record<string, any>, preserveItemIds = false
     description: String(item?.description || "Order item").trim(),
     quantity: Math.max(1, Number(item?.quantity ?? 1)),
     salePrice: asNumber(item?.salePrice),
-    supplierCost: asNumber(item?.supplierCost),
+    ...(item?.supplierCost !== undefined ? { supplierCost: asNumber(item.supplierCost) } : {}),
     tax: asNumber(item?.tax),
     commission: asNumber(item?.commission),
     status: ORDER_STATUSES.includes(item?.status) ? item.status : "draft",
@@ -44,10 +45,8 @@ function sanitizeOrderPayload(body: Record<string, any>, preserveItemIds = false
     serviceFees: asNumber(body.serviceFees),
     markup: asNumber(body.markup),
     discounts: asNumber(body.discounts),
-    supplierCost: asNumber(body.supplierCost),
     supplierTaxes: asNumber(body.supplierTaxes),
     paymentFees: asNumber(body.paymentFees),
-    amountPaid: asNumber(body.amountPaid),
     source: String(body.source || "manual"),
     travelDate: body.travelDate ? new Date(body.travelDate) : undefined,
     items: normalizedItems,
@@ -125,6 +124,10 @@ router.get("/:id", async (req: AuthRequest, res: Response) => {
 
 router.post("/", requireWorkflowRole("sales"), async (req: AuthRequest, res: Response) => {
   try {
+    const ledgerFields = getLedgerDerivedOrderFields(req.body || {});
+    if (ledgerFields.length) {
+      return res.status(400).json({ message: `Cannot set derived order financial fields: ${describeLedgerDerivedOrderFields(ledgerFields)}.` });
+    }
     const payload = sanitizeOrderPayload(req.body || {});
     if (!payload.customerId) {
       return res.status(400).json({ message: "customerId is required" });
@@ -132,6 +135,7 @@ router.post("/", requireWorkflowRole("sales"), async (req: AuthRequest, res: Res
 
     const order = await Order.create({
       ...payload,
+      supplierCost: calculateOrderSupplierCost(payload.items),
       ownerId: req.userId,
       orderNumber: `ORD-${Date.now()}`,
     });
@@ -146,6 +150,10 @@ router.post("/", requireWorkflowRole("sales"), async (req: AuthRequest, res: Res
 });
 
 router.patch("/:id", requireWorkflowRole("sales"), async (req: AuthRequest, res: Response) => {
+  const ledgerFields = getLedgerDerivedOrderFields(req.body || {});
+  if (ledgerFields.length) {
+    return res.status(400).json({ message: `Cannot set derived order financial fields: ${describeLedgerDerivedOrderFields(ledgerFields)}.` });
+  }
   const order = await findAccessibleOrder(req.params.id, String(req.userId));
   if (!order) {
     return res.status(404).json({ message: "Order not found" });
@@ -185,7 +193,7 @@ router.patch("/:id", requireWorkflowRole("sales"), async (req: AuthRequest, res:
         return {
           ...item,
           _id: existing._id,
-          supplierCost: existing.estimatedSupplierCost === undefined ? item.supplierCost : existing.supplierCost,
+          supplierCost: existing.estimatedSupplierCost === undefined ? (item.supplierCost ?? existing.supplierCost) : existing.supplierCost,
           estimatedSupplierCost: existing.estimatedSupplierCost,
         };
       })
@@ -202,17 +210,18 @@ router.patch("/:id", requireWorkflowRole("sales"), async (req: AuthRequest, res:
     serviceFees: asNumber(req.body.serviceFees ?? order.serviceFees),
     markup: asNumber(req.body.markup ?? order.markup),
     discounts: asNumber(req.body.discounts ?? order.discounts),
-    supplierCost: asNumber(req.body.supplierCost ?? order.supplierCost),
     supplierTaxes: asNumber(req.body.supplierTaxes ?? order.supplierTaxes),
     paymentFees: asNumber(req.body.paymentFees ?? order.paymentFees),
-    amountPaid: asNumber(req.body.amountPaid ?? order.amountPaid),
     source: req.body.source ?? order.source,
     travelDate: req.body.travelDate ? new Date(req.body.travelDate) : order.travelDate,
     items: normalizedItems,
   });
+  if (Array.isArray(req.body?.items)) {
+    order.supplierCost = calculateOrderSupplierCost(normalizedItems);
+  }
 
   await order.save();
-  if (req.body?.items !== undefined || ["saleSubtotal", "taxes", "serviceFees", "markup", "discounts", "supplierCost", "supplierTaxes", "paymentFees"].some((key) => req.body?.[key] !== undefined)) {
+  if (req.body?.items !== undefined || ["saleSubtotal", "taxes", "serviceFees", "markup", "discounts", "supplierTaxes", "paymentFees"].some((key) => req.body?.[key] !== undefined)) {
     await writeAuditEvent({
       req,
       action: "order.financials_updated",
@@ -259,6 +268,7 @@ router.post("/:id/items", requireWorkflowRole("sales"), async (req: AuthRequest,
   };
 
   order.items.push(item as any);
+  order.supplierCost = calculateOrderSupplierCost(order.items);
   await order.save();
   res.status(201).json(order);
 });
