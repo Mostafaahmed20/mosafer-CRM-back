@@ -13,13 +13,13 @@ export async function getAccessibleOrderFilter(userId: string) {
   const boardIds = boards.map((board) => board._id);
   const lists = boardIds.length ? await List.find({ board: { $in: boardIds } }).select("_id").lean() : [];
   const linkedCards = lists.length
-    ? await Card.find({ list: { $in: lists.map((list) => list._id) }, orderId: { $exists: true } }).select("orderId").lean()
+    ? await Card.find({ list: { $in: lists.map((list) => list._id) } }).select("_id").lean()
     : [];
   return {
     $or: [
       { ownerId: userId },
       { sourceBoardId: { $in: boardIds } },
-      { _id: { $in: linkedCards.map((card) => card.orderId).filter(Boolean) } },
+      { sourceCardId: { $in: linkedCards.map((card) => card._id) } },
     ],
   };
 }

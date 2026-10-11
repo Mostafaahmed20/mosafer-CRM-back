@@ -4,7 +4,8 @@ import { Order, deriveOrderStatusAfterSupplierBooking } from "../models/Order.js
 import { OrderQuote, applyQuoteAcceptance, calculateQuoteTotal } from "../models/OrderQuote.js";
 import { OrderPayment, calculateOrderPaymentTotals, calculateOrderSettlement } from "../models/OrderPayment.js";
 import { OrderFulfillment, buildSupplierReferenceDuplicateFilter } from "../models/OrderFulfillment.js";
-import { AuthRequest, authMiddleware, requireVerifiedEmail, requireWorkflowRole } from "../middleware/auth.js";
+import { AuthRequest, authMiddleware, requireVerifiedEmail, requireWorkflowRole, requireAnyWorkflowRole } from "../middleware/auth.js";
+import { getSupplierSubmissionBlocker } from "../lib/clientPaymentVerification.js";
 
 import { findAccessibleOrder, getAccessibleOrderFilter } from "../lib/orderAccess.js";
 
@@ -51,9 +52,22 @@ router.get("/:orderId/settlement", async (req: AuthRequest, res: Response) => {
   res.json({ totals, settlement, orderStatus: order.status });
 });
 
-router.post("/:orderId/supplier-bookings", requireWorkflowRole("operations"), async (req: AuthRequest, res: Response) => {
+router.post("/:orderId/supplier-bookings", requireAnyWorkflowRole(["sales", "operations"]), async (req: AuthRequest, res: Response) => {
   const order = await findAccessibleOrder(req.params.orderId, String(req.userId));
   if (!order) return res.status(404).json({ message: "Order not found" });
+
+  const clientPayments = await OrderPayment.find({ orderId: order._id });
+  const paymentBlocker = getSupplierSubmissionBlocker({
+    customerTotal: order.customerTotal,
+    currency: order.currency,
+    payments: clientPayments.map((payment) => ({
+      amount: payment.amount,
+      currency: payment.currency,
+      status: payment.status,
+      accountantConfirmation: payment.accountantConfirmation,
+    })),
+  });
+  if (paymentBlocker) return res.status(409).json({ message: paymentBlocker, code: "CLIENT_PAYMENT_NOT_VERIFIED" });
 
   const payload = {
     orderId: order._id,

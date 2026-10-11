@@ -58,7 +58,7 @@ router.get("/:orderId/payments", async (req: AuthRequest, res: Response) => {
   });
 });
 
-router.post("/:orderId/payments", requireWorkflowRole("accounting"), async (req: AuthRequest, res: Response) => {
+router.post("/:orderId/payments", requireAnyWorkflowRole(["sales", "accounting"]), async (req: AuthRequest, res: Response) => {
   const order = await findAccessibleOrder(req.params.orderId, String(req.userId));
   if (!order) return res.status(404).json({ message: "Order not found" });
   if (isAccountingLocked(order.accountingStatus)) return res.status(409).json({ message: "Order payments are locked after accounting handoff" });
@@ -71,8 +71,9 @@ router.post("/:orderId/payments", requireWorkflowRole("accounting"), async (req:
   const idempotencyKey = String(req.body?.idempotencyKey || "").trim();
   const status = String(req.body?.status || "pending").toLowerCase();
   if (!idempotencyKey) return res.status(400).json({ message: "Payment idempotency key is required" });
-  if (!["pending", "posted"].includes(status)) return res.status(400).json({ message: "Payments must start as pending or posted" });
+  if (status !== "pending") return res.status(400).json({ message: "Client transfers must be recorded as pending, then verified after the accountant confirms by WhatsApp" });
   if (!paymentMethod || !/^[A-Z]{3}$/.test(currency)) return res.status(400).json({ message: "Valid payment method and currency are required" });
+  if (currency !== String(order.currency || "").toUpperCase()) return res.status(400).json({ message: `Record this transfer in the order currency (${order.currency}); add an exchange rate before recording a different currency` });
 
   const previous = await OrderPayment.findOne({ orderId: order._id, idempotencyKey });
   if (previous) {
@@ -122,6 +123,49 @@ router.post("/:orderId/payments", requireWorkflowRole("accounting"), async (req:
   await order.save();
 
   res.status(201).json(payment);
+});
+
+router.post("/:orderId/payments/:paymentId/confirm-transfer", requireAnyWorkflowRole(["sales", "accounting"]), async (req: AuthRequest, res: Response) => {
+  const order = await findAccessibleOrder(req.params.orderId, String(req.userId));
+  if (!order) return res.status(404).json({ message: "Order not found" });
+  if (isAccountingLocked(order.accountingStatus)) return res.status(409).json({ message: "Payments are locked after accounting handoff" });
+
+  const payment = await OrderPayment.findOne({ _id: req.params.paymentId, orderId: order._id });
+  if (!payment) return res.status(404).json({ message: "Payment not found" });
+  if (payment.currency !== String(order.currency || "").toUpperCase()) {
+    return res.status(409).json({ message: "Payment currency must match the order currency before confirmation" });
+  }
+  const confirmedBy = String(req.body?.accountantName || "").trim();
+  if (!confirmedBy) return res.status(400).json({ message: "Enter the accountant's name who confirmed the transfer on WhatsApp" });
+  if (payment.status === "posted" && payment.accountantConfirmation?.confirmedAt) {
+    return res.json({ payment, duplicate: true });
+  }
+
+  payment.status = "posted";
+  payment.paidAt = payment.paidAt || new Date();
+  payment.accountantConfirmation = {
+    channel: "WhatsApp",
+    confirmedBy,
+    confirmedAt: new Date(),
+    recordedBy: String(req.userId),
+    notes: String(req.body?.notes || "").trim(),
+  };
+  await payment.save();
+
+  const allPayments = await OrderPayment.find({ orderId: order._id });
+  const totals = calculateOrderPaymentTotals(allPayments.map((entry) => ({ amount: entry.amount, status: entry.status })));
+  order.amountPaid = totals.net;
+  order.status = deriveOrderStatusAfterPayment(order.status, order.amountPaid);
+  await order.save();
+  await writeAuditEvent({
+    req,
+    action: "client_payment.whatsapp_confirmed",
+    message: `Client transfer confirmed by ${confirmedBy} via WhatsApp for order ${order.orderNumber}`,
+    category: "finance",
+    target: { id: payment._id, type: "order_payment", label: payment.paymentReference || order.orderNumber },
+    meta: { orderId: String(order._id), amount: payment.amount, currency: payment.currency, confirmedBy, notes: payment.accountantConfirmation.notes },
+  });
+  res.json({ payment, order });
 });
 
 router.get("/:orderId/travelers", async (req: AuthRequest, res: Response) => {
@@ -195,7 +239,7 @@ router.post("/:orderId/travelers", requireAnyWorkflowRole(["sales", "operations"
   res.status(201).json(snapshot);
 });
 
-router.post("/:orderId/payments/:paymentId/attachments", requireWorkflowRole("accounting"), uploadOrderAttachment.single("file"), async (req: AuthRequest, res: Response) => {
+router.post("/:orderId/payments/:paymentId/attachments", requireAnyWorkflowRole(["sales", "accounting"]), uploadOrderAttachment.single("file"), async (req: AuthRequest, res: Response) => {
   const order = await findAccessibleOrder(req.params.orderId, String(req.userId));
   if (!order) {
     safeUnlink(req.file?.path);

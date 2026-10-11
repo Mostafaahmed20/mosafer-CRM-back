@@ -7,6 +7,7 @@ import { writeAuditEvent } from "../lib/audit.js";
 
 import { findAccessibleOrder, getAccessibleOrderFilter } from "../lib/orderAccess.js";
 import { describeLedgerDerivedOrderFields, getLedgerDerivedOrderFields } from "../lib/orderFinancialInput.js";
+import { nextReservationReference } from "../models/Counter.js";
 
 const router = Router();
 router.use(authMiddleware, requireVerifiedEmail);
@@ -99,7 +100,7 @@ router.get("/supplier-payables", async (req: AuthRequest, res: Response) => {
       orderId: order._id,
       orderNumber: order.orderNumber,
       customer: order.customerId,
-      currency: order.currency,
+      currency: fulfillment.supplierInvoiceCurrency || order.currency,
       supplierName: fulfillment.supplierName || "Supplier",
       invoiceReference: fulfillment.supplierInvoiceReference || "",
       invoiceAmount: fulfillment.supplierInvoiceAmount,
@@ -138,6 +139,7 @@ router.post("/", requireWorkflowRole("sales"), async (req: AuthRequest, res: Res
       supplierCost: calculateOrderSupplierCost(payload.items),
       ownerId: req.userId,
       orderNumber: `ORD-${Date.now()}`,
+      reservationRef: await nextReservationReference(),
     });
 
     res.status(201).json(order);

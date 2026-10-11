@@ -91,6 +91,8 @@ export interface IOrderFulfillment extends Document {
   supplierReferenceKey?: string;
   supplierInvoiceReference?: string;
   supplierInvoiceAmount?: number;
+  supplierInvoiceCurrency?: string;
+  supplierInvoiceExchangeRateToOrderCurrency?: number;
   supplierInvoiceDueAt?: Date;
   supplierInvoiceAttachments: IOrderAttachment[];
   supplierPayments: IOrderSupplierPayment[];
@@ -243,6 +245,8 @@ const orderFulfillmentSchema = new mongoose.Schema<IOrderFulfillment>(
     supplierReferenceKey: { type: String, default: undefined, select: false },
     supplierInvoiceReference: { type: String, default: "" },
     supplierInvoiceAmount: { type: Number, min: 0 },
+    supplierInvoiceCurrency: { type: String, uppercase: true, trim: true, default: "" },
+    supplierInvoiceExchangeRateToOrderCurrency: { type: Number, min: 0 },
     supplierInvoiceDueAt: { type: Date },
     supplierInvoiceAttachments: {
       type: [{

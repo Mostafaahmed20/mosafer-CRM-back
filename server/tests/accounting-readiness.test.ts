@@ -12,6 +12,7 @@ const completeCase = {
     supplierReference: "PNR-123",
     supplierInvoiceReference: "INV-123",
     supplierInvoiceAmount: 200,
+    supplierInvoiceAttachments: [{ url: "/uploads/invoice.pdf" }],
     status: "booked",
   }],
   currency: "USD",
@@ -37,6 +38,29 @@ test("accounting readiness uses sale services and does not require duplicate pac
   assert.ok(result.blockers.includes("Add supplier booking details for CAI-JED return tickets"));
   assert.ok(result.blockers.includes("Settle the customer balance before accounting handoff"));
   assert.ok(result.blockers.includes("Record and post the customer payment"));
+});
+
+test("accounting handoff requires a recorded conversion rate for a foreign supplier invoice", () => {
+  const foreignInvoiceCase = {
+    ...completeCase,
+    currency: "SAR",
+    fulfillments: completeCase.fulfillments.map((fulfillment) => ({
+      ...fulfillment,
+      supplierInvoiceCurrency: "USD",
+    })),
+  };
+  const missingRate = getAccountingReadiness(foreignInvoiceCase);
+  assert.equal(missingRate.ready, false);
+  assert.ok(missingRate.blockers.includes("Enter the USD to SAR exchange rate for CAI-JED return tickets"));
+
+  const withRate = getAccountingReadiness({
+    ...foreignInvoiceCase,
+    fulfillments: foreignInvoiceCase.fulfillments.map((fulfillment) => ({
+      ...fulfillment,
+      supplierInvoiceExchangeRateToOrderCurrency: 3.75,
+    })),
+  });
+  assert.equal(withRate.ready, true);
 });
 
 test("accounting handoff locks sent, received, and closed orders", () => {

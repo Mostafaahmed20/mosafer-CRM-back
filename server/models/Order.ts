@@ -74,6 +74,7 @@ export interface IOrderItem extends Document {
 
 export interface IOrder extends Document {
   orderNumber: string;
+  reservationRef?: string;
   customerId: mongoose.Types.ObjectId | string;
   branchId?: mongoose.Types.ObjectId | string;
   ownerId: mongoose.Types.ObjectId | string;
@@ -242,6 +243,7 @@ const orderItemSchema = new mongoose.Schema<IOrderItem>(
 const orderSchema = new mongoose.Schema<IOrder>(
   {
     orderNumber: { type: String, required: true, unique: true, trim: true },
+    reservationRef: { type: String, trim: true, default: undefined },
     customerId: { type: mongoose.Schema.Types.ObjectId, ref: "CustomerProfile", required: true, index: true },
     branchId: { type: mongoose.Schema.Types.ObjectId, ref: "Branch", default: null },
     ownerId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true, index: true },
@@ -335,5 +337,7 @@ orderSchema.pre("save", function appendStatusHistory(next) {
 
   next();
 });
+
+orderSchema.index({ reservationRef: 1 }, { unique: true, sparse: true });
 
 export const Order = mongoose.model<IOrder>("Order", orderSchema);

@@ -1,8 +1,5 @@
 import { Router, Response } from "express";
-import {
-  CustomerProfile,
-  CUSTOMER_DECISION_ROLES,
-} from "../models/CustomerProfile.js";
+import { CustomerProfile } from "../models/CustomerProfile.js";
 import {
   AuthRequest,
   authMiddleware,
@@ -21,34 +18,14 @@ async function isAdminUser(userId?: string): Promise<boolean> {
   return normalizeUserRole((user as any)?.role) === "admin";
 }
 
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-async function findDuplicateCustomer({
-  owner,
-  agencyName,
-  email,
-  excludeId,
-}: {
+async function findDuplicateCustomer({ owner, email, excludeId }: {
   owner: string;
-  agencyName?: string;
   email?: string;
   excludeId?: string;
 }) {
   const base = excludeId ? { _id: { $ne: excludeId }, owner } : { owner };
 
-  if (agencyName) {
-    const byAgency = await CustomerProfile.findOne({
-      ...base,
-      agencyName: { $regex: `^${escapeRegex(agencyName)}$`, $options: "i" },
-    }).select("_id");
-    if (byAgency) {
-      return { field: "agencyName" as const };
-    }
-  }
-
-  if (email) {
+  if (email?.trim()) {
     const byEmail = await CustomerProfile.findOne({
       ...base,
       email: email.toLowerCase(),
@@ -61,16 +38,12 @@ async function findDuplicateCustomer({
   return null;
 }
 
-function duplicateMessage(field: "agencyName" | "email") {
-  return field === "agencyName"
-    ? "Agency name already exists"
-    : "Email already exists";
-}
+function duplicateMessage() { return "Email already exists"; }
 
-// GET /api/customers - List current user's customer profiles
+// GET /api/customers - List shared customer profiles for the CRM workspace
 router.get("/", async (req: AuthRequest, res: Response) => {
   try {
-    const customers = await CustomerProfile.find({ owner: req.userId })
+    const customers = await CustomerProfile.find({})
       .sort({ createdAt: -1 });
 
     res.json(customers);
@@ -101,33 +74,15 @@ router.post("/", async (req: AuthRequest, res: Response) => {
     if (!displayName) {
       return res.status(400).json({ message: "customerName is required" });
     }
-    if (!location?.trim()) {
-      return res.status(400).json({ message: "location is required" });
-    }
-    if (!email?.trim()) {
-      return res.status(400).json({ message: "email is required" });
-    }
-    if (!decisionRole?.trim()) {
-      return res.status(400).json({ message: "decisionRole is required" });
-    }
-
-    if (!CUSTOMER_DECISION_ROLES.includes(decisionRole as any)) {
-      return res.status(400).json({
-        message: "Invalid decisionRole",
-        allowedValues: CUSTOMER_DECISION_ROLES,
-      });
-    }
-
     const normalizedAgencyName = displayName;
-    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedEmail = String(email || "").trim().toLowerCase();
 
     const duplicate = await findDuplicateCustomer({
       owner: req.userId!,
-      agencyName: normalizedAgencyName,
       email: normalizedEmail,
     });
     if (duplicate) {
-      return res.status(409).json({ message: duplicateMessage(duplicate.field) });
+      return res.status(409).json({ message: duplicateMessage() });
     }
 
     const customer = new CustomerProfile({
@@ -138,9 +93,9 @@ router.post("/", async (req: AuthRequest, res: Response) => {
       country: String(country || "").trim(),
       language: String(language || "").trim(),
       bookingValue: String(bookingValue || "").trim(),
-      location: location.trim(),
+      location: String(location || "").trim(),
       email: normalizedEmail,
-      decisionRole,
+      decisionRole: decisionRole || "Other",
     });
 
     await customer.save();
@@ -150,9 +105,6 @@ router.post("/", async (req: AuthRequest, res: Response) => {
       const key = Object.keys(error?.keyPattern || {})[0];
       if (key === "email") {
         return res.status(409).json({ message: "Email already exists" });
-      }
-      if (key === "agencyName") {
-        return res.status(409).json({ message: "Agency name already exists" });
       }
       return res.status(409).json({ message: "Customer profile already exists" });
     }
@@ -200,32 +152,13 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
       customer.customerName = nextName;
     }
 
-    if (location !== undefined) {
-      if (!String(location).trim()) {
-        return res.status(400).json({ message: "location cannot be empty" });
-      }
-      customer.location = String(location).trim();
-    }
+    if (location !== undefined) customer.location = String(location).trim();
 
     if (email !== undefined) {
-      if (!String(email).trim()) {
-        return res.status(400).json({ message: "email cannot be empty" });
-      }
       customer.email = String(email).trim().toLowerCase();
     }
 
-    if (decisionRole !== undefined) {
-      if (!String(decisionRole).trim()) {
-        return res.status(400).json({ message: "decisionRole cannot be empty" });
-      }
-      if (!CUSTOMER_DECISION_ROLES.includes(String(decisionRole) as any)) {
-        return res.status(400).json({
-          message: "Invalid decisionRole",
-          allowedValues: CUSTOMER_DECISION_ROLES,
-        });
-      }
-      customer.decisionRole = String(decisionRole) as any;
-    }
+    if (decisionRole !== undefined) customer.decisionRole = String(decisionRole || "Other") as any;
 
     if (phone !== undefined) customer.phone = String(phone).trim();
     if (country !== undefined) customer.country = String(country).trim();
@@ -234,12 +167,11 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
 
     const duplicate = await findDuplicateCustomer({
       owner: req.userId!,
-      agencyName: customer.agencyName,
       email: customer.email,
       excludeId: req.params.id,
     });
     if (duplicate) {
-      return res.status(409).json({ message: duplicateMessage(duplicate.field) });
+      return res.status(409).json({ message: duplicateMessage() });
     }
 
     await customer.save();
@@ -249,9 +181,6 @@ router.patch("/:id", async (req: AuthRequest, res: Response) => {
       const key = Object.keys(error?.keyPattern || {})[0];
       if (key === "email") {
         return res.status(409).json({ message: "Email already exists" });
-      }
-      if (key === "agencyName") {
-        return res.status(409).json({ message: "Agency name already exists" });
       }
       return res.status(409).json({ message: "Customer profile already exists" });
     }

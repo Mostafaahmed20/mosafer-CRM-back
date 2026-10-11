@@ -18,11 +18,12 @@ const router = Router();
 router.use(authMiddleware, requireVerifiedEmail);
 
 async function accountingReadinessForOrder(order: InstanceType<typeof Order>) {
-  const [customer, fulfillments, payments, travelers] = await Promise.all([
-    CustomerProfile.findOne({ _id: order.customerId, owner: order.ownerId }).select("agencyName location email"),
+  const [customer, fulfillments, payments, travelers, sourceCard] = await Promise.all([
+    CustomerProfile.findById(order.customerId).select("agencyName customerName location email"),
     OrderFulfillment.find({ orderId: order._id, status: { $ne: "cancelled" } }),
     OrderPayment.find({ orderId: order._id }),
     OrderTraveler.find({ orderId: order._id }),
+    order.sourceCardId ? Card.findById(order.sourceCardId).select("travelerCount adultCount childCount") : Card.findOne({ orderId: order._id }).select("travelerCount adultCount childCount"),
   ]);
   const paymentTotals = calculateOrderPaymentTotals(payments.map((payment) => ({ amount: payment.amount, status: payment.status })));
   const readiness = getAccountingReadiness({
@@ -32,7 +33,7 @@ async function accountingReadinessForOrder(order: InstanceType<typeof Order>) {
     currency: order.currency,
     balance: order.balance,
     customerPayments: { paid: paymentTotals.net, pending: paymentTotals.pending },
-    travelerCount: travelers.length,
+    travelerCount: travelers.length || Number(sourceCard?.travelerCount || 0) || Number(sourceCard?.adultCount || 0) + Number(sourceCard?.childCount || 0),
   });
   return { ...readiness, customer, fulfillments, paymentTotals, travelers };
 }

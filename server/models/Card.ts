@@ -5,10 +5,16 @@ export interface ICard extends Document {
   title: string;
   subject?: string;
   requester?: string;
+  reservationRef?: string;
   bookingRef?: string;
   agencyName?: string;
+  customerPhone?: string;
+  customerEmail?: string;
+  preferredLanguage?: "English" | "Arabic";
   destination?: string;
   travelerCount?: number;
+  adultCount?: number;
+  childCount?: number;
   travelServices?: ("Flight" | "Hotel" | "Tour" | "Transfer" | "Other")[];
   hotelName?: string;
   supplierName?: string;
@@ -183,10 +189,16 @@ const cardSchema = new mongoose.Schema<ICard>(
     title: { type: String, required: true },
     subject: { type: String, default: "" },
     requester: { type: String, default: "" },
+    reservationRef: { type: String, trim: true, default: undefined },
     bookingRef: { type: String, default: "" },
     agencyName: { type: String, default: "" },
+    customerPhone: { type: String, default: "", trim: true },
+    customerEmail: { type: String, default: "", trim: true, lowercase: true },
+    preferredLanguage: { type: String, enum: ["English", "Arabic"], default: "English" },
     destination: { type: String, default: "" },
     travelerCount: { type: Number, default: 0, min: 0 },
+    adultCount: { type: Number, default: 0, min: 0 },
+    childCount: { type: Number, default: 0, min: 0 },
     travelServices: {
       type: [{ type: String, enum: ["Flight", "Hotel", "Tour", "Transfer", "Other"] }],
       default: [],
@@ -372,6 +384,7 @@ const cardSchema = new mongoose.Schema<ICard>(
 );
 
 cardSchema.index({ kind: 1, list: 1 });
+cardSchema.index({ reservationRef: 1 }, { unique: true, sparse: true });
 cardSchema.index({ kind: 1, businessDate: 1, coverageSlotId: 1, dailyTaskOrigin: 1 });
 cardSchema.index({ kind: 1, businessDate: 1, recurrenceTemplateId: 1, shift: 1 });
 

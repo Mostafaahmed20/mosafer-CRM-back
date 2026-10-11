@@ -15,6 +15,7 @@ import { writeAuditEvent } from "../lib/audit.js";
 import { emitNotifications } from "../lib/notify.js";
 import { ensureCardSla, deriveSlaStatus, computeSlaDue } from "../lib/sla.js";
 import { UPLOADS_DIR } from "../lib/uploads.js";
+import { nextReservationReference } from "../models/Counter.js";
 import {
   deleteCloudinaryAttachment,
   isCloudinaryConfigured,
@@ -130,6 +131,7 @@ router.post("/", boardAuth("guest"), async (req: BoardAuthRequest, res: Response
     const {
       title, description, bookingRef, agencyName, hotelName, source, type,
       checkInDate, checkOutDate, arrivalDate, destination, travelerCount, travelServices,
+      customerPhone, customerEmail, preferredLanguage, adultCount, childCount,
       salesStage, qualificationStatus, leadNeed, leadBudget, travelDates, lossReason,
       followUpAt, followUpChannel, followUpNote, followUpCompleted,
       accountingStatus, accountingReference, accountingNotes,
@@ -157,9 +159,15 @@ router.post("/", boardAuth("guest"), async (req: BoardAuthRequest, res: Response
       subject: title,
       requester: creator?.username || creator?.email || "",
       bookingRef: nextBookingRef,
+      reservationRef: await nextReservationReference(),
       agencyName: agencyName || "",
+      customerPhone: String(customerPhone || "").trim(),
+      customerEmail: String(customerEmail || "").trim().toLowerCase(),
+      preferredLanguage: preferredLanguage === "Arabic" ? "Arabic" : "English",
       destination: String(destination || "").trim(),
       travelerCount: Number.isFinite(Number(travelerCount)) ? Math.max(0, Number(travelerCount)) : 0,
+      adultCount: Number.isFinite(Number(adultCount)) ? Math.max(0, Number(adultCount)) : 0,
+      childCount: Number.isFinite(Number(childCount)) ? Math.max(0, Number(childCount)) : 0,
       travelServices: Array.isArray(travelServices)
         ? travelServices.filter((service) => ["Flight", "Hotel", "Tour", "Transfer", "Other"].includes(service))
         : [],
@@ -284,6 +292,22 @@ router.patch("/:cardId", boardAuth("guest"), async (req: BoardAuthRequest, res: 
     }
 
     const updateData: Record<string, unknown> = { ...req.body };
+    // Reservation numbers are assigned by the server and remain stable for the life of the case.
+    delete updateData.reservationRef;
+    const effectiveSalesStage = String(updateData.salesStage ?? existingCard.salesStage ?? "New");
+    const effectiveLossReason = String(updateData.lossReason ?? existingCard.lossReason ?? "").trim();
+    if (effectiveSalesStage === "Lost" && !effectiveLossReason) {
+      return res.status(400).json({ message: "A lost reason is required before marking this lead as Lost" });
+    }
+    if (typeof updateData.customerPhone === "string") updateData.customerPhone = updateData.customerPhone.trim();
+    if (typeof updateData.customerEmail === "string") updateData.customerEmail = updateData.customerEmail.trim().toLowerCase();
+    if (updateData.adultCount !== undefined || updateData.childCount !== undefined) {
+      const adults = Number(updateData.adultCount ?? existingCard.adultCount ?? 0);
+      const children = Number(updateData.childCount ?? existingCard.childCount ?? 0);
+      updateData.adultCount = Number.isFinite(adults) ? Math.max(0, adults) : 0;
+      updateData.childCount = Number.isFinite(children) ? Math.max(0, children) : 0;
+      updateData.travelerCount = Number(updateData.adultCount) + Number(updateData.childCount);
+    }
     const previousStatus = existingCard.status || "New";
     const previousArchived = Boolean(existingCard.archived);
     const previousAgentId = existingCard.agent ? existingCard.agent.toString() : "";

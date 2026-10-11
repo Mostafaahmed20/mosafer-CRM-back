@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { Response, Router } from "express";
 import { Order, deriveOrderStatusAfterSupplierBooking, setOrderItemActualSupplierCost } from "../models/Order.js";
+import { OrderPayment } from "../models/OrderPayment.js";
 import {
   OrderFulfillment,
   buildFulfillmentHistory,
@@ -14,6 +15,7 @@ import { AuthRequest, authMiddleware, requireVerifiedEmail, requireWorkflowRole,
 import { isAccountingLocked } from "../lib/accountingReadiness.js";
 import { storeOrderAttachment, uploadOrderAttachment } from "../lib/orderAttachments.js";
 import { safeUnlink } from "../lib/cloudinary.js";
+import { getSupplierSubmissionBlocker } from "../lib/clientPaymentVerification.js";
 
 import { findAccessibleOrder, getAccessibleOrderFilter } from "../lib/orderAccess.js";
 
@@ -32,6 +34,20 @@ function optionalAmount(value: number | undefined): number | null {
   return value === undefined ? null : Number(value);
 }
 
+async function getClientPaymentBlocker(order: InstanceType<typeof Order>) {
+  const payments = await OrderPayment.find({ orderId: order._id });
+  return getSupplierSubmissionBlocker({
+    customerTotal: order.customerTotal,
+    currency: order.currency,
+    payments: payments.map((payment) => ({
+      amount: payment.amount,
+      currency: payment.currency,
+      status: payment.status,
+      accountantConfirmation: payment.accountantConfirmation,
+    })),
+  });
+}
+
 router.get("/:orderId/fulfillment", async (req: AuthRequest, res: Response) => {
   const order = await findAccessibleOrder(req.params.orderId, String(req.userId));
   if (!order) return res.status(404).json({ message: "Order not found" });
@@ -40,6 +56,7 @@ router.get("/:orderId/fulfillment", async (req: AuthRequest, res: Response) => {
   res.json({
     items: fulfillment.map((item) => ({
       ...item.toObject(),
+      supplierInvoiceCurrency: item.supplierInvoiceCurrency || "",
       supplierInvoiceSettlement: item.supplierInvoiceAmount === undefined
         ? null
         : calculateSupplierInvoiceSettlement(item.supplierInvoiceAmount, item.supplierPayments, item.supplierInvoiceDueAt),
@@ -50,7 +67,7 @@ router.get("/:orderId/fulfillment", async (req: AuthRequest, res: Response) => {
   });
 });
 
-router.post("/:orderId/fulfillment/:fulfillmentId/invoice-attachments", requireAnyWorkflowRole(["operations", "accounting"]), uploadOrderAttachment.single("file"), async (req: AuthRequest, res: Response) => {
+router.post("/:orderId/fulfillment/:fulfillmentId/invoice-attachments", requireAnyWorkflowRole(["sales", "operations", "accounting"]), uploadOrderAttachment.single("file"), async (req: AuthRequest, res: Response) => {
   const order = await findAccessibleOrder(req.params.orderId, String(req.userId));
   if (!order) {
     safeUnlink(req.file?.path);
@@ -93,6 +110,10 @@ router.post("/:orderId/fulfillment/:fulfillmentId/supplier-payments", requireWor
   if (!fulfillment) return res.status(404).json({ message: "Fulfillment item not found" });
   if (fulfillment.supplierInvoiceAmount === undefined) {
     return res.status(409).json({ message: "Record the supplier invoice before posting a payment" });
+  }
+  const supplierPaymentCurrency = String(fulfillment.supplierInvoiceCurrency || order.currency).toUpperCase();
+  if (req.body?.currency && String(req.body.currency).toUpperCase() !== supplierPaymentCurrency) {
+    return res.status(400).json({ message: `Supplier payment must use invoice currency ${supplierPaymentCurrency}` });
   }
 
   const requestedAmount = Number(req.body?.amount);
@@ -211,10 +232,13 @@ router.post("/:orderId/fulfillment/:fulfillmentId/supplier-payments", requireWor
   });
 });
 
-router.post("/:orderId/fulfillment", requireWorkflowRole("operations"), async (req: AuthRequest, res: Response) => {
+router.post("/:orderId/fulfillment", requireAnyWorkflowRole(["sales", "operations"]), async (req: AuthRequest, res: Response) => {
   const order = await findAccessibleOrder(req.params.orderId, String(req.userId));
   if (!order) return res.status(404).json({ message: "Order not found" });
   if (isAccountingLocked(order.accountingStatus)) return res.status(409).json({ message: "Supplier bookings are locked after accounting handoff" });
+
+  const paymentBlocker = await getClientPaymentBlocker(order);
+  if (paymentBlocker) return res.status(409).json({ message: paymentBlocker, code: "CLIENT_PAYMENT_NOT_VERIFIED" });
 
   const status = String(req.body?.status || "pending").toLowerCase();
   const supplierName = String(req.body?.supplierName || "").trim();
@@ -252,7 +276,7 @@ router.post("/:orderId/fulfillment", requireWorkflowRole("operations"), async (r
   }
 });
 
-router.patch("/:orderId/fulfillment/:fulfillmentId", requireWorkflowRole("operations"), async (req: AuthRequest, res: Response) => {
+router.patch("/:orderId/fulfillment/:fulfillmentId", requireAnyWorkflowRole(["sales", "operations"]), async (req: AuthRequest, res: Response) => {
   const order = await findAccessibleOrder(req.params.orderId, String(req.userId));
   if (!order) return res.status(404).json({ message: "Order not found" });
   if (isAccountingLocked(order.accountingStatus)) return res.status(409).json({ message: "Supplier fulfillment is locked after accounting handoff" });
@@ -268,6 +292,10 @@ router.patch("/:orderId/fulfillment/:fulfillmentId", requireWorkflowRole("operat
   const nextSupplierName = String(req.body?.supplierName ?? fulfillment.supplierName ?? "").trim();
   const nextSupplierReference = String(req.body?.supplierReference ?? fulfillment.supplierReference ?? "").trim();
   const nextFulfillmentStatus = String(req.body?.status ?? fulfillment.status).toLowerCase();
+  if (["booked", "in_progress"].includes(nextFulfillmentStatus)) {
+    const paymentBlocker = await getClientPaymentBlocker(order);
+    if (paymentBlocker) return res.status(409).json({ message: paymentBlocker, code: "CLIENT_PAYMENT_NOT_VERIFIED" });
+  }
   const nextOrderItemId = req.body?.orderItemId === null || req.body?.orderItemId === ""
     ? ""
     : String(req.body?.orderItemId ?? fulfillment.orderItemId ?? "");
@@ -276,6 +304,13 @@ router.patch("/:orderId/fulfillment/:fulfillmentId", requireWorkflowRole("operat
   const nextInvoiceAmount = rawInvoiceAmount === null || rawInvoiceAmount === "" || rawInvoiceAmount === undefined
     ? undefined
     : Number(rawInvoiceAmount);
+  const nextInvoiceCurrency = String(req.body?.supplierInvoiceCurrency ?? fulfillment.supplierInvoiceCurrency ?? order.currency).trim().toUpperCase();
+  const rawInvoiceExchangeRate = req.body?.supplierInvoiceExchangeRateToOrderCurrency ?? fulfillment.supplierInvoiceExchangeRateToOrderCurrency;
+  const nextInvoiceExchangeRate = nextInvoiceCurrency === order.currency.toUpperCase()
+    ? 1
+    : rawInvoiceExchangeRate === null || rawInvoiceExchangeRate === "" || rawInvoiceExchangeRate === undefined
+      ? undefined
+      : Number(rawInvoiceExchangeRate);
   const hasInvoiceDueDateUpdate = Object.prototype.hasOwnProperty.call(req.body || {}, "supplierInvoiceDueAt");
   const rawInvoiceDueDate = hasInvoiceDueDateUpdate ? req.body.supplierInvoiceDueAt : fulfillment.supplierInvoiceDueAt;
   const nextInvoiceDueAt = rawInvoiceDueDate === null || rawInvoiceDueDate === "" || rawInvoiceDueDate === undefined
@@ -299,6 +334,13 @@ router.patch("/:orderId/fulfillment/:fulfillmentId", requireWorkflowRole("operat
   if (nextInvoiceAmount !== undefined && (!Number.isFinite(nextInvoiceAmount) || nextInvoiceAmount < 0)) {
     return res.status(400).json({ message: "Supplier invoice amount must be zero or greater" });
   }
+  if (nextInvoiceAmount !== undefined && !/^[A-Z]{3}$/.test(nextInvoiceCurrency)) return res.status(400).json({ message: "Supplier invoice currency must be a three-letter code" });
+  if (nextInvoiceExchangeRate !== undefined && (!Number.isFinite(nextInvoiceExchangeRate) || nextInvoiceExchangeRate <= 0)) {
+    return res.status(400).json({ message: "Exchange rate must be greater than zero" });
+  }
+  if (nextInvoiceAmount !== undefined && nextInvoiceCurrency !== order.currency.toUpperCase() && nextInvoiceExchangeRate === undefined) {
+    return res.status(400).json({ message: `Enter the exchange rate from ${nextInvoiceCurrency} to ${order.currency}` });
+  }
   if (nextInvoiceAmount !== undefined && !nextOrderItemId) {
     return res.status(400).json({ message: "Link the fulfillment to an order service before entering an invoice amount" });
   }
@@ -306,6 +348,8 @@ router.patch("/:orderId/fulfillment/:fulfillmentId", requireWorkflowRole("operat
     return res.status(400).json({ message: "Link the fulfillment to an order service before entering an invoice reference" });
   }
   const supplierPaidTotal = fulfillment.supplierPayments.reduce((total, payment) => total + Number(payment.amount || 0), 0);
+  const invoiceCurrencyChanged = nextInvoiceCurrency !== String(fulfillment.supplierInvoiceCurrency || order.currency).toUpperCase();
+  if (fulfillment.supplierPayments.length && invoiceCurrencyChanged) return res.status(409).json({ message: "Invoice currency cannot change after supplier payments are recorded" });
   if (fulfillment.supplierPayments.length && nextOrderItemId !== String(fulfillment.orderItemId || "")) {
     return res.status(409).json({ message: "A service link cannot change after supplier payments are recorded" });
   }
@@ -315,7 +359,7 @@ router.patch("/:orderId/fulfillment/:fulfillmentId", requireWorkflowRole("operat
   if (fulfillment.supplierPayments.length && nextInvoiceAmount === undefined) {
     return res.status(409).json({ message: "An invoice with recorded payments cannot be cleared" });
   }
-  if (nextInvoiceAmount !== undefined && Math.round(nextInvoiceAmount * 100) < Math.round(supplierPaidTotal * 100)) {
+  if (nextInvoiceAmount !== undefined && nextInvoiceCurrency === String(fulfillment.supplierInvoiceCurrency || order.currency).toUpperCase() && Math.round(nextInvoiceAmount * 100) < Math.round(supplierPaidTotal * 100)) {
     return res.status(400).json({ message: "Invoice amount cannot be less than supplier payments already recorded" });
   }
   const nextOrderItem = nextOrderItemId
@@ -368,6 +412,8 @@ router.patch("/:orderId/fulfillment/:fulfillmentId", requireWorkflowRole("operat
     hotelConfirmationNumber: fulfillment.hotelConfirmationNumber,
     supplierInvoiceReference: fulfillment.supplierInvoiceReference,
     supplierInvoiceAmount: fulfillment.supplierInvoiceAmount,
+    supplierInvoiceCurrency: fulfillment.supplierInvoiceCurrency,
+    supplierInvoiceExchangeRateToOrderCurrency: fulfillment.supplierInvoiceExchangeRateToOrderCurrency,
     supplierInvoiceDueAt: fulfillment.supplierInvoiceDueAt,
     serviceType: fulfillment.serviceType,
     status: fulfillment.status,
@@ -378,6 +424,8 @@ router.patch("/:orderId/fulfillment/:fulfillmentId", requireWorkflowRole("operat
   updates.orderItemId = nextOrderItemId || null;
   updates.supplierInvoiceReference = nextInvoiceReference;
   updates.supplierInvoiceAmount = nextInvoiceAmount ?? null;
+  updates.supplierInvoiceCurrency = nextInvoiceCurrency;
+  updates.supplierInvoiceExchangeRateToOrderCurrency = nextInvoiceExchangeRate ?? null;
   updates.supplierInvoiceDueAt = nextInvoiceDueAt ?? null;
 
   const previousItemCosts = order.items.map((item) => ({
@@ -391,15 +439,19 @@ router.patch("/:orderId/fulfillment/:fulfillmentId", requireWorkflowRole("operat
   const originalOrderUpdatedAt = order.updatedAt?.getTime();
   const previousOrderItemId = String(fulfillment.orderItemId || "");
   const previousInvoiceAmount = fulfillment.supplierInvoiceAmount;
-  const costAssignmentChanged = previousOrderItemId !== nextOrderItemId || previousInvoiceAmount !== nextInvoiceAmount;
+  const previousInvoiceOrderAmount = previousInvoiceAmount === undefined
+    ? undefined
+    : previousInvoiceAmount * (Number(fulfillment.supplierInvoiceExchangeRateToOrderCurrency) || 1);
+  const nextInvoiceOrderAmount = nextInvoiceAmount === undefined ? undefined : nextInvoiceAmount * (nextInvoiceExchangeRate || 1);
+  const costAssignmentChanged = previousOrderItemId !== nextOrderItemId || previousInvoiceAmount !== nextInvoiceAmount || previousInvoiceOrderAmount !== nextInvoiceOrderAmount;
   if (costAssignmentChanged) {
     if (previousOrderItemId && previousInvoiceAmount !== undefined) {
       if (!setOrderItemActualSupplierCost(order, previousOrderItemId, undefined)) {
         return res.status(400).json({ message: "Previously linked order service was not found" });
       }
     }
-    if (nextOrderItemId && nextInvoiceAmount !== undefined) {
-      if (!setOrderItemActualSupplierCost(order, nextOrderItemId, nextInvoiceAmount)) {
+    if (nextOrderItemId && nextInvoiceOrderAmount !== undefined) {
+      if (!setOrderItemActualSupplierCost(order, nextOrderItemId, nextInvoiceOrderAmount)) {
         return res.status(400).json({ message: "Linked service could not accept the supplier invoice cost" });
       }
     }
@@ -428,6 +480,8 @@ router.patch("/:orderId/fulfillment/:fulfillmentId", requireWorkflowRole("operat
   fulfillment.orderItemId = nextOrderItemId || undefined;
   fulfillment.supplierInvoiceReference = nextInvoiceReference;
   fulfillment.supplierInvoiceAmount = nextInvoiceAmount;
+  fulfillment.supplierInvoiceCurrency = nextInvoiceCurrency;
+  fulfillment.supplierInvoiceExchangeRateToOrderCurrency = nextInvoiceExchangeRate;
   fulfillment.supplierInvoiceDueAt = nextInvoiceDueAt;
   if (Array.isArray(req.body?.tasks)) {
     fulfillment.tasks = req.body.tasks;
@@ -456,6 +510,8 @@ router.patch("/:orderId/fulfillment/:fulfillmentId", requireWorkflowRole("operat
         currentOrder.status !== originalOrderStatus ||
         String(currentFulfillment.orderItemId || "") !== previousOrderItemId ||
         optionalAmount(currentFulfillment.supplierInvoiceAmount) !== optionalAmount(previousInvoiceAmount) ||
+        String(currentFulfillment.supplierInvoiceCurrency || order.currency).toUpperCase() !== String(fulfillment.supplierInvoiceCurrency || order.currency).toUpperCase() ||
+        optionalAmount(currentFulfillment.supplierInvoiceExchangeRateToOrderCurrency) !== optionalAmount(fulfillment.supplierInvoiceExchangeRateToOrderCurrency) ||
         currentFulfillment.supplierPayments.length !== fulfillment.supplierPayments.length
       ) {
         throw new Error("ORDER_FULFILLMENT_STALE");
@@ -484,6 +540,8 @@ router.patch("/:orderId/fulfillment/:fulfillmentId", requireWorkflowRole("operat
       currentFulfillment.supplierReference = fulfillment.supplierReference;
       currentFulfillment.supplierInvoiceReference = fulfillment.supplierInvoiceReference;
       currentFulfillment.supplierInvoiceAmount = fulfillment.supplierInvoiceAmount;
+      currentFulfillment.supplierInvoiceCurrency = fulfillment.supplierInvoiceCurrency;
+      currentFulfillment.supplierInvoiceExchangeRateToOrderCurrency = fulfillment.supplierInvoiceExchangeRateToOrderCurrency;
       currentFulfillment.supplierInvoiceDueAt = fulfillment.supplierInvoiceDueAt;
       currentFulfillment.serviceType = fulfillment.serviceType;
       currentFulfillment.status = fulfillment.status;

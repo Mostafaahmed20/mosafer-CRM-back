@@ -8,6 +8,7 @@
     "check": "pnpm --filter @trello/server run check",
     "build": "pnpm --filter @trello/server run build",
     "migrate:order-fulfillment-references": "pnpm --filter @trello/server run migrate:order-fulfillment-references",
+    "migrate:reservation-references": "pnpm --filter @trello/server run migrate:reservation-references",
     "start": "pnpm --filter @trello/server run start"
   }
 }

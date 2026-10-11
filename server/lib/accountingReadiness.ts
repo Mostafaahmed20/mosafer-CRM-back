@@ -6,6 +6,9 @@ type ReadinessFulfillment = {
   supplierReference?: string;
   supplierInvoiceReference?: string;
   supplierInvoiceAmount?: number;
+  supplierInvoiceCurrency?: string;
+  supplierInvoiceExchangeRateToOrderCurrency?: number;
+  supplierInvoiceAttachments?: Array<{ url?: string }>;
   status?: string;
 };
 
@@ -27,8 +30,8 @@ export function getAccountingReadiness(input: {
   const items = input.items || [];
   const fulfillments = input.fulfillments || [];
 
-  if (!customer?.agencyName?.trim() || !customer.location?.trim() || !customer.email?.trim()) {
-    blockers.push("Complete the customer profile name, location, and email");
+  if (!customer?.agencyName?.trim()) {
+    blockers.push("Add the customer name");
   }
   if (!Number(input.travelerCount || 0)) blockers.push("Add at least one traveler to the sale");
   if (!input.currency?.trim()) blockers.push("Set the order currency");
@@ -49,6 +52,14 @@ export function getAccountingReadiness(input: {
     }
     if (!fulfillment.supplierInvoiceReference?.trim() || !Number.isFinite(Number(fulfillment.supplierInvoiceAmount))) {
       blockers.push(`Record supplier invoice and actual cost for ${label}`);
+    }
+    if (fulfillment.supplierInvoiceCurrency && input.currency && fulfillment.supplierInvoiceCurrency.toUpperCase() !== input.currency.toUpperCase()) {
+      if (!(Number(fulfillment.supplierInvoiceExchangeRateToOrderCurrency) > 0)) {
+        blockers.push(`Enter the ${fulfillment.supplierInvoiceCurrency} to ${input.currency} exchange rate for ${label}`);
+      }
+    }
+    if (!(fulfillment.supplierInvoiceAttachments || []).some((attachment) => Boolean(attachment.url?.trim()))) {
+      blockers.push(`Attach the supplier invoice document for ${label}`);
     }
     if (!["booked", "completed"].includes(String(fulfillment.status || "").toLowerCase())) {
       blockers.push(`Confirm supplier booking for ${label}`);

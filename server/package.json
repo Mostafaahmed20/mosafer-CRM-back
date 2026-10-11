@@ -8,6 +8,7 @@
     "check": "tsc --project tsconfig.json --noEmit",
     "build": "esbuild index.ts --platform=node --packages=external --bundle --format=esm --outdir=dist",
     "migrate:order-fulfillment-references": "tsx migrations/migrate-order-fulfillment-references.ts",
+    "migrate:reservation-references": "tsx migrations/migrate-reservation-references.ts",
     "start": "node dist/index.js"
   },
   "dependencies": {

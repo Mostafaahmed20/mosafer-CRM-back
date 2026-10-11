@@ -25,6 +25,13 @@ export interface IOrderPayment extends Document {
   paidAt?: Date;
   refundedAt?: Date;
   notes?: string;
+  accountantConfirmation?: {
+    channel: "WhatsApp";
+    confirmedBy: string;
+    confirmedAt: Date;
+    recordedBy: mongoose.Types.ObjectId | string;
+    notes?: string;
+  };
   attachments: IOrderAttachment[];
   createdAt?: Date;
   updatedAt?: Date;
@@ -112,6 +119,13 @@ const orderPaymentSchema = new mongoose.Schema<IOrderPayment>(
     paidAt: { type: Date },
     refundedAt: { type: Date },
     notes: { type: String, default: "" },
+    accountantConfirmation: {
+      channel: { type: String, enum: ["WhatsApp"] },
+      confirmedBy: { type: String, trim: true },
+      confirmedAt: { type: Date },
+      recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      notes: { type: String, default: "" },
+    },
     attachments: {
       type: [{
         name: { type: String, required: true },

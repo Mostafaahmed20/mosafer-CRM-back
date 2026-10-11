@@ -27,9 +27,9 @@ export interface ICustomerProfile extends Document {
   country?: string;
   language?: string;
   bookingValue?: string;
-  location: string;
-  email: string;
-  decisionRole: CustomerDecisionRole;
+  location?: string;
+  email?: string;
+  decisionRole?: CustomerDecisionRole;
 }
 
 const customerProfileSchema = new mongoose.Schema<ICustomerProfile>(
@@ -53,27 +53,29 @@ const customerProfileSchema = new mongoose.Schema<ICustomerProfile>(
     bookingValue: { type: String, default: "", trim: true },
     location: {
       type: String,
-      required: true,
+      default: "",
       trim: true,
     },
     email: {
       type: String,
-      required: true,
+      default: "",
       trim: true,
       lowercase: true,
     },
     decisionRole: {
       type: String,
       enum: CUSTOMER_DECISION_ROLES,
-      required: true,
+      default: "Other",
     },
   },
   { timestamps: true }
 );
 
 customerProfileSchema.index({ owner: 1, createdAt: -1 });
-customerProfileSchema.index({ owner: 1, email: 1 }, { unique: true });
-customerProfileSchema.index({ owner: 1, agencyName: 1 }, { unique: true });
+customerProfileSchema.index(
+  { owner: 1, email: 1 },
+  { unique: true, partialFilterExpression: { email: { $type: "string", $gt: "" } } }
+);
 
 export const CustomerProfile = mongoose.model<ICustomerProfile>(
   "CustomerProfile",
