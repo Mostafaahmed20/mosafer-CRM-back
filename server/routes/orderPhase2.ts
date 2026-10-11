@@ -140,6 +140,9 @@ router.post("/:orderId/payments/:paymentId/confirm-transfer", requireAnyWorkflow
   if (payment.status === "posted" && payment.accountantConfirmation?.confirmedAt) {
     return res.json({ payment, duplicate: true });
   }
+  if (payment.status !== "pending") {
+    return res.status(409).json({ message: "Only a pending client transfer can be confirmed" });
+  }
 
   payment.status = "posted";
   payment.paidAt = payment.paidAt || new Date();

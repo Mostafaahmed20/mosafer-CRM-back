@@ -64,8 +64,10 @@ function toDateOnly(value?: Date | string): string | undefined {
 export function buildCustomerTripPack(input: CustomerTripPackInput) {
   const packageItems = Array.isArray(input.package?.items) ? input.package.items : [];
   const orderItems = Array.isArray(input.order.items) ? input.order.items : [];
-  // Order.items is the canonical sale service list. Package items remain a legacy fallback.
-  const itinerarySource = orderItems.length ? orderItems : packageItems;
+  // A package can contain the customer-facing itinerary while order.items is the
+  // canonical priced sale list. Prefer the explicit package itinerary when it
+  // exists; use order services only for legacy packages without itinerary items.
+  const itinerarySource = packageItems.length ? packageItems : orderItems;
   const packageTravelerIds = new Set((input.package?.travelerIds || []).map(String));
   const travelers = (input.travelers || [])
     .filter((traveler) => !packageTravelerIds.size || packageTravelerIds.has(String(traveler._id)))

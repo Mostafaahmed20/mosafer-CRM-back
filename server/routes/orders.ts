@@ -1,6 +1,7 @@
 import { Response, Router } from "express";
 import { Order, ORDER_STATUSES, ORDER_ITEM_PRODUCT_TYPES, calculateOrderSupplierCost } from "../models/Order.js";
 import { OrderFulfillment, calculateSupplierInvoiceSettlement } from "../models/OrderFulfillment.js";
+import { OrderPayment, calculateOrderPaymentTotals } from "../models/OrderPayment.js";
 import { AuthRequest, authMiddleware, requireVerifiedEmail, requireWorkflowRole } from "../middleware/auth.js";
 import { isAccountingLocked } from "../lib/accountingReadiness.js";
 import { writeAuditEvent } from "../lib/audit.js";
@@ -59,7 +60,24 @@ router.get("/", async (req: AuthRequest, res: Response) => {
     .populate("customerId", "customerName agencyName email")
     .sort({ updatedAt: -1 })
     .limit(200);
-  res.json(orders);
+  const paymentDocs = orders.length
+    ? await OrderPayment.find({ orderId: { $in: orders.map((order) => order._id) } }).select("orderId amount status").lean()
+    : [];
+  const paymentSummaryByOrder = new Map<string, { paid: number; refunded: number; pending: number; hasPayments: boolean }>();
+  for (const payment of paymentDocs) {
+    const key = String(payment.orderId);
+    const current = paymentSummaryByOrder.get(key) || { paid: 0, refunded: 0, pending: 0, hasPayments: false };
+    const totals = calculateOrderPaymentTotals([{ amount: payment.amount, status: payment.status }]);
+    current.paid += totals.paid;
+    current.refunded += totals.refunded;
+    current.pending += totals.pending;
+    current.hasPayments = true;
+    paymentSummaryByOrder.set(key, current);
+  }
+  res.json(orders.map((order) => ({
+    ...order.toObject(),
+    paymentSummary: paymentSummaryByOrder.get(String(order._id)) || { paid: 0, refunded: 0, pending: 0, hasPayments: false },
+  })));
 });
 
 router.get("/supplier-payables", async (req: AuthRequest, res: Response) => {

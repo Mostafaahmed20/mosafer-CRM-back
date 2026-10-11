@@ -1,4 +1,4 @@
-type ReadinessCustomer = { agencyName?: string; location?: string; email?: string };
+type ReadinessCustomer = { agencyName?: string; customerName?: string; location?: string; email?: string };
 type ReadinessOrderItem = { _id?: unknown; description?: string; salePrice?: number; supplierCost?: number };
 type ReadinessFulfillment = {
   orderItemId?: unknown;
@@ -30,7 +30,7 @@ export function getAccountingReadiness(input: {
   const items = input.items || [];
   const fulfillments = input.fulfillments || [];
 
-  if (!customer?.agencyName?.trim()) {
+  if (!(customer?.customerName?.trim() || customer?.agencyName?.trim())) {
     blockers.push("Add the customer name");
   }
   if (!Number(input.travelerCount || 0)) blockers.push("Add at least one traveler to the sale");
