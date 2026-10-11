@@ -497,7 +497,8 @@ router.patch("/:orderId/fulfillment/:fulfillmentId", requireAnyWorkflowRole(["sa
   let savedFulfillment: typeof fulfillment | null = null;
   try {
     await session.withTransaction(async () => {
-      const currentOrder = await Order.findOne({ _id: order._id, ownerId: req.userId }).session(session);
+      const accessFilter = await getAccessibleOrderFilter(String(req.userId));
+      const currentOrder = await Order.findOne({ _id: order._id, ...accessFilter }).session(session);
       const currentFulfillment = await OrderFulfillment.findOne({ _id: fulfillment._id, orderId: order._id }).session(session);
       if (!currentOrder || !currentFulfillment) {
         throw new Error("Order or fulfillment no longer exists");

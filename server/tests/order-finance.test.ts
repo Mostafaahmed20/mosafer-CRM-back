@@ -8,6 +8,7 @@ import {
   deriveOrderStatusAfterSupplierBooking,
   setOrderItemActualSupplierCost,
 } from "../models/Order.js";
+import { calculateOrderPaymentTotals, calculateOrderSettlement } from "../models/OrderPayment.js";
 import { describeLedgerDerivedOrderFields, getLedgerDerivedOrderFields } from "../lib/orderFinancialInput.js";
 
 test("generic order writes reject ledger-derived payment and supplier cost fields", () => {
@@ -43,6 +44,24 @@ test("calculateOrderMetrics derives customerTotal, totalCost, grossMargin and ba
   assert.equal(metrics.totalCost, 765);
   assert.equal(metrics.grossMargin, 35);
   assert.equal(metrics.balance, 400);
+});
+
+test("customer settlement treats pending transfers as not-yet-posted money", () => {
+  const totals = calculateOrderPaymentTotals([
+    { amount: 400, status: "posted" },
+    { amount: 300, status: "pending" },
+    { amount: 50, status: "refunded" },
+  ]);
+  const settlement = calculateOrderSettlement({
+    customerTotal: 1000,
+    paid: totals.paid,
+    refunded: totals.refunded,
+    pending: totals.pending,
+  });
+
+  assert.deepEqual(totals, { paid: 400, refunded: 50, pending: 300, net: 350 });
+  assert.equal(settlement.balanceDue, 350);
+  assert.equal(settlement.status, "partially_paid");
 });
 
 test("deriveOrderStatusAfterPayment only advances eligible orders", () => {

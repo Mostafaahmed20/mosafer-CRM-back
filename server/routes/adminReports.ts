@@ -7,7 +7,7 @@ import { Card } from "../models/Card.js";
 import { CustomerProfile } from "../models/CustomerProfile.js";
 import { List } from "../models/List.js";
 import { Order } from "../models/Order.js";
-import { OrderPayment, calculateOrderPaymentTotals } from "../models/OrderPayment.js";
+import { OrderPayment, calculateOrderPaymentTotals, calculateOrderSettlement } from "../models/OrderPayment.js";
 import { OrderTraveler } from "../models/OrderTraveler.js";
 import { Quotation } from "../models/Quotation.js";
 import { TravelService } from "../models/TravelService.js";
@@ -47,7 +47,7 @@ function parseDate(value: string | undefined, endOfDay = false): Date | null | u
   return date;
 }
 
-function financialsFor(card: any, order: any, payments: any[], services: any[]) {
+export function financialsFor(card: any, order: any, payments: any[], services: any[]) {
   const currency = String(order?.currency || services[0]?.currency || "USD");
   const serviceTotals = services.reduce((sum, service) => {
     const quantity = Math.max(1, Number(service.quantity || 1));
@@ -56,15 +56,23 @@ function financialsFor(card: any, order: any, payments: any[], services: any[]) 
       sellingPrice: sum.sellingPrice + Number(service.sellingRate ?? service.salePrice ?? service.sellingPrice ?? 0) * quantity,
     };
   }, { netCost: 0, sellingPrice: 0 });
-  const hasServiceLines = services.length > 0;
-  const netCost = hasServiceLines ? serviceTotals.netCost : Number(order?.supplierCost ?? card.netPaidToHotel ?? 0);
-  const sellingPrice = hasServiceLines ? serviceTotals.sellingPrice : Number(order?.customerTotal ?? card.sellToAgency ?? 0);
   const totals = calculateOrderPaymentTotals(payments.map((payment) => ({ amount: payment.amount, status: payment.status })));
+  // Orders are the accounting source of truth. Quotation/travel-service lines
+  // are only used for legacy confirmed leads that have no order yet.
+  const netCost = order
+    ? Number(order.totalCost ?? order.supplierCost ?? 0)
+    : services.length ? serviceTotals.netCost : Number(card.netPaidToHotel ?? 0);
+  const sellingPrice = order
+    ? Number(order.customerTotal ?? 0)
+    : services.length ? serviceTotals.sellingPrice : Number(card.sellToAgency ?? 0);
   const paid = order ? totals.paid : (String(card.paymentStatus).toLowerCase() === "paid" ? sellingPrice : 0);
   const refunded = order ? totals.refunded : 0;
   const pending = order ? totals.pending : (String(card.paymentStatus).toLowerCase() === "partially paid" ? Math.max(sellingPrice - paid, 0) : 0);
-  const balance = order ? Math.max(sellingPrice - paid + refunded - pending, 0) : Math.max(sellingPrice - paid, 0);
-  const profit = sellingPrice - netCost;
+  const settlement = order
+    ? calculateOrderSettlement({ customerTotal: sellingPrice, paid, refunded, pending })
+    : null;
+  const balance = settlement?.balanceDue ?? Math.max(sellingPrice - paid, 0);
+  const profit = order ? Number(order.grossMargin ?? sellingPrice - netCost) : sellingPrice - netCost;
   const revenueWithoutVat = profit / 1.15;
   const paymentStatus = order
     ? balance <= 0 ? "Paid" : paid > 0 || pending > 0 ? "Partially paid" : "Unpaid"

@@ -98,7 +98,8 @@ router.post("/:orderId/supplier-bookings", requireAnyWorkflowRole(["sales", "ope
   let fulfillment: InstanceType<typeof OrderFulfillment> | null = null;
   try {
     await session.withTransaction(async () => {
-      const currentOrder = await Order.findOne({ _id: order._id, ownerId: req.userId }).session(session);
+      const accessFilter = await getAccessibleOrderFilter(String(req.userId));
+      const currentOrder = await Order.findOne({ _id: order._id, ...accessFilter }).session(session);
       if (!currentOrder) throw new Error("Order not found");
 
       const newFulfillment = new OrderFulfillment({
